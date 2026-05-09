@@ -44,6 +44,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+GOPAY_OTP_SOURCE_HINTS = ("whatsapp", "gopay", "go pay", "gojek")
+
 
 def _billing_from_config(cfg: dict[str, Any]) -> dict[str, Any]:
     billing = cfg.get("billing") or {}
@@ -148,29 +150,49 @@ class FlowStore:
 class OtpStore:
     def __init__(self):
         self._cond = threading.Condition()
-        self._cached: dict[str, Any] | None = None
+        self._items: list[dict[str, Any]] = []
 
-    def submit(self, otp: str, source: str = "webhook", issued_at_unix: int | None = None) -> None:
+    def submit(
+        self,
+        otp: str,
+        source: str = "webhook",
+        issued_at_unix: int | None = None,
+        hint: str = "",
+    ) -> None:
         code = re.sub(r"\D", "", str(otp or ""))
         if not re.fullmatch(r"\d{4,8}", code):
             raise ValueError("otp must be 4-8 digits")
         source = str(source or "webhook")[:80]
+        hint = str(hint or "")[:512]
         ts = int(issued_at_unix or time.time())
         with self._cond:
-            self._cached = {"otp": code, "source": source, "ts": ts}
+            self._items.append({"otp": code, "source": source, "ts": ts, "hint": hint})
+            if len(self._items) > 20:
+                self._items = self._items[-20:]
             self._cond.notify_all()
 
-    def wait(self, timeout_seconds: int, issued_after_unix: int, is_active) -> dict[str, Any] | None:
+    def wait(
+        self,
+        timeout_seconds: int,
+        issued_after_unix: int,
+        is_active,
+        purpose: str = "gopay",
+    ) -> dict[str, Any] | None:
         deadline = time.time() + max(1, int(timeout_seconds))
         issued_after_unix = int(issued_after_unix or 0)
+        purpose = (purpose or "gopay").strip().lower()
         with self._cond:
             while is_active():
-                if self._cached:
-                    if int(self._cached["ts"]) >= issued_after_unix:
-                        item = self._cached
-                        self._cached = None
-                        return item
-                    self._cached = None
+                while self._items:
+                    item = self._items.pop(0)
+                    if int(item["ts"]) >= issued_after_unix:
+                        if _otp_matches_purpose(item, purpose):
+                            return item
+                        logger.info(
+                            "[payment] ignoring OTP source=%s for purpose=%s",
+                            str(item.get("source") or "")[:80],
+                            purpose,
+                        )
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return None
@@ -196,6 +218,7 @@ class OtpService(otp_pb2_grpc.OtpServiceServicer):
             timeout_seconds=timeout_seconds,
             issued_after_unix=issued_after_unix,
             is_active=context.is_active,
+            purpose=purpose,
         )
         if item:
             logger.info("[payment] OTP served from built-in webhook source=%s", item["source"])
@@ -235,6 +258,23 @@ def _payload_source(payload: Any, headers) -> str:
             if value:
                 return value
     return str(headers.get("User-Agent") or "webhook").strip() or "webhook"
+
+
+def _payload_hint(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload[:512]
+    try:
+        return json.dumps(payload, ensure_ascii=False)[:512]
+    except Exception:
+        return str(payload)[:512]
+
+
+def _otp_matches_purpose(item: dict[str, Any], purpose: str) -> bool:
+    if purpose not in {"gopay", "payment", "gopay_payment"}:
+        return True
+    source = str(item.get("source") or "").lower()
+    haystack = f"{source} {item.get('hint') or ''}".lower()
+    return any(hint in haystack for hint in GOPAY_OTP_SOURCE_HINTS)
 
 
 def _single_value_query(query: dict[str, list[str]]) -> dict[str, str]:
@@ -291,7 +331,7 @@ def _make_otp_webhook_handler(otp_store: OtpStore, token: str):
 
             source = _payload_source(payload, self.headers)
             try:
-                otp_store.submit(code, source=source)
+                otp_store.submit(code, source=source, hint=_payload_hint(payload))
             except ValueError as exc:
                 self._json(422, {"ok": False, "error": str(exc)})
                 return

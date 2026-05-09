@@ -106,6 +106,10 @@ class OTPCancelled(GoPayError):
     pass
 
 
+class GoPayOTPRejected(GoPayError):
+    pass
+
+
 class GoPayPINRejected(GoPayError):
     pass
 
@@ -685,10 +689,20 @@ class GoPayCharger:
             headers=self._gopay_headers(locale=self.browser_locale),
             timeout=DEFAULT_TIMEOUT,
         )
-        r.raise_for_status()
+        if r.status_code != 200:
+            body = (r.text or "").strip()
+            if not body:
+                try:
+                    body = json.dumps(r.json(), ensure_ascii=False)
+                except Exception:
+                    body = "<empty response>"
+            message = f"validate-otp {r.status_code}: {body[:400]}"
+            if r.status_code == 400:
+                raise GoPayOTPRejected(message)
+            raise GoPayError(message)
         data = r.json()
         if not data.get("success"):
-            raise GoPayError(f"validate-otp failed: {data}")
+            raise GoPayOTPRejected(f"validate-otp failed: {data}")
         challenge = (
             data.get("data", {}).get("challenge", {}).get("action", {}).get("value", {})
         )
@@ -922,13 +936,14 @@ class GoPayCharger:
         self._midtrans_load_transaction(snap_token)
         reference_id = self._midtrans_init_linking(snap_token)
         self._gopay_validate_reference(reference_id)
+        issued_after_unix = int(time.time())
         self._gopay_user_consent(reference_id)
         return {
             "cs_id": cs_id,
             "stripe_pk": stripe_pk,
             "snap_token": snap_token,
             "reference_id": reference_id,
-            "issued_after_unix": int(time.time() - 15),
+            "issued_after_unix": issued_after_unix,
         }
 
     def complete_after_otp(self, state: dict, otp: str) -> dict:

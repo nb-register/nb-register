@@ -27,7 +27,7 @@ COPY gopay-flow/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY gopay-flow/ /app/gopay-flow/
-COPY README.md NOTICE LICENSE run_gopay.sh run_payment_server.sh /app/
+COPY NOTICE LICENSE run_gopay.sh run_payment_server.sh /app/
 
 WORKDIR /app/gopay-flow
 EXPOSE 50051 8081

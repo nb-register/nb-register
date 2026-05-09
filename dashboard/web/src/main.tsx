@@ -11,6 +11,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  X,
   Zap
 } from 'lucide-react';
 import './styles.css';
@@ -23,7 +24,6 @@ type Account = {
   error_message: string;
   session_token: string;
   access_token: string;
-  charge_ref: string;
   created_at: number;
   updated_at: number;
 };
@@ -174,12 +174,23 @@ function App() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  function selectAccount(account: Account) {
+    setSelectedAccount(account);
+    setSelectedJob(null);
+  }
+
   async function selectJob(job: Job) {
     try {
+      setSelectedAccount(null);
       setSelectedJob(await api<Job>(`/api/jobs/${job.job_id}`));
     } catch (err) {
       setToast({ kind: 'error', text: errorText(err) });
     }
+  }
+
+  function closeDetails() {
+    setSelectedAccount(null);
+    setSelectedJob(null);
   }
 
   return (
@@ -231,7 +242,7 @@ function App() {
             showSecrets={showSecrets}
             runningAccountIds={runningAccountIds}
             busy={busy}
-            onSelect={setSelectedAccount}
+            onSelect={selectAccount}
             onRegister={(account) => runAccountWorkflow('注册账号', '/api/workflows/register', account)}
             onActivate={(account) => runAccountWorkflow('激活账号', '/api/workflows/activate', account)}
             onRegisterActivate={(account) => runAccountWorkflow('注册并激活', '/api/workflows/register-and-activate', account)}
@@ -247,20 +258,28 @@ function App() {
           </PanelHeader>
           <JobTable jobs={jobs} selected={selectedJob?.job_id} busy={busy} onSelect={selectJob} onRetry={retryJob} />
         </div>
+      </section>
 
-        <div className="panel detailPanel">
-          <PanelHeader title="详情" icon={<Activity size={16} />} />
-          <Details
+      <DetailDrawer open={!!selectedAccount} title="账号详情" onClose={closeDetails}>
+        {selectedAccount && (
+          <AccountDetails
             account={selectedAccount}
-            job={selectedJob}
             showSecrets={showSecrets}
-            busy={busy}
             onSessionSave={(account, sessionToken) => updateAccountAuth(account, { session_token: sessionToken })}
             onAccessSave={(account, accessToken) => updateAccountAuth(account, { access_token: accessToken })}
+          />
+        )}
+      </DetailDrawer>
+
+      <DetailDrawer open={!!selectedJob} title="工作流详情" onClose={closeDetails}>
+        {selectedJob && (
+          <JobDetails
+            job={selectedJob}
+            busy={busy}
             onJobRetry={retryJob}
           />
-        </div>
-      </section>
+        )}
+      </DetailDrawer>
     </main>
   );
 }
@@ -286,6 +305,97 @@ function PanelHeader({ title, icon, children }: { title: string; icon: React.Rea
   );
 }
 
+function DetailDrawer({ open, title, onClose, children }: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="drawerLayer open">
+      <button className="drawerBackdrop" onClick={onClose} aria-label="关闭详情" />
+      <aside className="detailDrawer" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="drawerHeader">
+          <div><Activity size={16} />{title}</div>
+          <button className="iconButton" title="关闭" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        {children}
+      </aside>
+    </div>
+  );
+}
+
+function AccountDetails({ account, showSecrets, onSessionSave, onAccessSave }: {
+  account: Account;
+  showSecrets: boolean;
+  onSessionSave: (account: Account, sessionToken: string) => Promise<void>;
+  onAccessSave: (account: Account, accessToken: string) => Promise<void>;
+}) {
+  return (
+    <div className="details">
+      <section>
+        <h3>账号</h3>
+        <KV label="ID" value={account.account_id} mono />
+        <KV label="Status" value={account.status || '-'} />
+        <KV label="Email" value={account.email} />
+        <KV label="Password" value={showSecrets ? account.password : mask(account.password)} mono />
+        <TokenEditor label="Session" field="session_token" account={account} showSecrets={showSecrets} onSave={onSessionSave} />
+        <TokenEditor label="Access" field="access_token" account={account} showSecrets={showSecrets} onSave={onAccessSave} />
+        <KV label="Created" value={formatUnix(account.created_at)} />
+        <KV label="Updated" value={formatUnix(account.updated_at)} />
+        <KV label="Error" value={account.error_message || '-'} />
+      </section>
+    </div>
+  );
+}
+
+function JobDetails({ job, busy, onJobRetry }: {
+  job: Job;
+  busy: boolean;
+  onJobRetry: (job: Job) => void;
+}) {
+  return (
+    <div className="details">
+      <section>
+        <div className="sectionTitle">
+          <h3>工作流</h3>
+          <button disabled={busy || job.status === 'RUNNING'} onClick={() => onJobRetry(job)}>
+            <RefreshCcw size={14} /> 重试
+          </button>
+        </div>
+        <KV label="Job" value={job.job_id} mono />
+        <KV label="Action" value={job.action} />
+        <KV label="Status" value={job.status} />
+        <KV label="Error" value={job.error_message || '-'} />
+        <div className="timeline">
+          {(job.steps || []).map((step) => (
+            <div className="step" key={step.step_name}>
+              <div>
+                <strong>{step.step_name}</strong>
+                <StatusBadge status={step.status} retryable={step.retryable} />
+              </div>
+              {step.error_message && <p>{step.error_message}</p>}
+              {step.result_json && <pre>{formatJSON(step.result_json)}</pre>}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
 function AccountTable({ accounts, selected, showSecrets, runningAccountIds, busy, onSelect, onRegister, onActivate, onRegisterActivate, onDelete }: {
   accounts: Account[];
   selected?: string;
@@ -308,7 +418,6 @@ function AccountTable({ accounts, selected, showSecrets, runningAccountIds, busy
             <th>状态</th>
             <th>Session</th>
             <th>Access</th>
-            <th>Charge</th>
             <th>更新</th>
             <th>操作</th>
           </tr>
@@ -328,7 +437,6 @@ function AccountTable({ accounts, selected, showSecrets, runningAccountIds, busy
                 <td><StatusBadge status={account.status} /></td>
                 <td className="mono">{showSecrets ? short(account.session_token, 18) : mask(account.session_token)}</td>
                 <td className="mono">{showSecrets ? short(account.access_token, 18) : mask(account.access_token)}</td>
-                <td>{account.charge_ref || '-'}</td>
                 <td>{formatUnix(account.updated_at)}</td>
                 <td>
                   <div className="rowActions" onClick={(event) => event.stopPropagation()}>
@@ -428,63 +536,6 @@ function CreateAccountForm({ onDone, onError }: {
         <button onClick={() => run('创建账号', '/api/accounts', form)} disabled={!!working}><Plus size={15} /> 创建账号</button>
       </div>
       {working && <p className="hint">正在执行：{working}</p>}
-    </div>
-  );
-}
-
-function Details({ account, job, showSecrets, busy, onSessionSave, onAccessSave, onJobRetry }: {
-  account: Account | null;
-  job: Job | null;
-  showSecrets: boolean;
-  busy: boolean;
-  onSessionSave: (account: Account, sessionToken: string) => Promise<void>;
-  onAccessSave: (account: Account, accessToken: string) => Promise<void>;
-  onJobRetry: (job: Job) => void;
-}) {
-  if (!account && !job) return <p className="empty">选择账号或工作流查看详情。</p>;
-  return (
-    <div className="details">
-      {account && (
-        <section>
-          <h3>账号</h3>
-          <KV label="ID" value={account.account_id} mono />
-          <KV label="Status" value={account.status || '-'} />
-          <KV label="Email" value={account.email} />
-          <KV label="Password" value={showSecrets ? account.password : mask(account.password)} mono />
-          <TokenEditor label="Session" field="session_token" account={account} showSecrets={showSecrets} onSave={onSessionSave} />
-          <TokenEditor label="Access" field="access_token" account={account} showSecrets={showSecrets} onSave={onAccessSave} />
-          <KV label="Charge" value={account.charge_ref || '-'} mono />
-          <KV label="Created" value={formatUnix(account.created_at)} />
-          <KV label="Updated" value={formatUnix(account.updated_at)} />
-          <KV label="Error" value={account.error_message || '-'} />
-        </section>
-      )}
-      {job && (
-        <section>
-          <div className="sectionTitle">
-            <h3>工作流</h3>
-            <button disabled={busy || job.status === 'RUNNING'} onClick={() => onJobRetry(job)}>
-              <RefreshCcw size={14} /> 重试
-            </button>
-          </div>
-          <KV label="Job" value={job.job_id} mono />
-          <KV label="Action" value={job.action} />
-          <KV label="Status" value={job.status} />
-          <KV label="Error" value={job.error_message || '-'} />
-          <div className="timeline">
-            {(job.steps || []).map((step) => (
-              <div className="step" key={step.step_name}>
-                <div>
-                  <strong>{step.step_name}</strong>
-                  <StatusBadge status={step.status} retryable={step.retryable} />
-                </div>
-                {step.error_message && <p>{step.error_message}</p>}
-                {step.result_json && <pre>{formatJSON(step.result_json)}</pre>}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
     </div>
   );
 }

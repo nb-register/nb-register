@@ -122,7 +122,7 @@ input, select {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(360px, .8fr);
-  grid-template-rows: minmax(0, 1fr) minmax(0, .88fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   overflow: hidden;
@@ -138,9 +138,8 @@ input, select {
   flex-direction: column;
 }
 
-.accountsPanel { grid-column: 1; grid-row: 1 / 3; }
+.accountsPanel { grid-column: 1; }
 .jobsPanel { grid-column: 2; }
-.detailPanel { grid-column: 2; }
 
 .panelHeader {
   justify-content: space-between;
@@ -203,7 +202,7 @@ table {
   font-size: 13px;
 }
 
-.accountsPanel table { min-width: 940px; }
+.accountsPanel table { min-width: 860px; }
 
 th {
   text-align: left;
@@ -312,6 +311,75 @@ tbody tr:hover, tr.selected { background: #eef6f1; }
   overflow: auto;
 }
 
+.drawerLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.drawerLayer.open {
+  pointer-events: auto;
+}
+
+.drawerBackdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: rgba(23, 33, 27, .18);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.drawerLayer.open .drawerBackdrop {
+  opacity: 1;
+}
+
+.detailDrawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(620px, calc(100vw - 24px));
+  height: 100%;
+  background: #fbfcfb;
+  border-left: 1px solid #d6ddd5;
+  box-shadow: -16px 0 48px rgba(23, 33, 27, .16);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 190ms ease;
+}
+
+.drawerLayer.open .detailDrawer {
+  transform: translateX(0);
+}
+
+.drawerHeader {
+  min-height: 58px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e0e5df;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 650;
+}
+
+.drawerHeader > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detailDrawer .details {
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
 .details h3 {
   margin: 0 0 10px;
   font-size: 15px;
@@ -405,7 +473,7 @@ pre {
     grid-template-rows: auto;
     overflow: visible;
   }
-  .accountsPanel, .jobsPanel, .detailPanel { grid-column: 1; grid-row: auto; }
+  .accountsPanel, .jobsPanel { grid-column: 1; grid-row: auto; }
   .panel { min-height: 320px; }
   .details { grid-template-columns: 1fr; }
 }
