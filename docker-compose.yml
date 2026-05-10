@@ -91,7 +91,7 @@ services:
       - OUTLOOK_REGISTER_LOCK_WAIT_SECONDS=${OUTLOOK_REGISTER_LOCK_WAIT_SECONDS:-0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      - ./outlook-register-service/register-results:/opt/OutlookRegister/Results
+      - ./outlook-register-service/register-results:/app/Results
     extra_hosts:
       - "host.docker.internal:host-gateway"
     shm_size: "2gb"

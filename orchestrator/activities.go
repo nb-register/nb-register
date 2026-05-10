@@ -434,20 +434,20 @@ func (s *orchestratorServer) RegisterMailboxAtomicActivity(ctx context.Context, 
 				return data, fmt.Errorf("%s", msg)
 			}
 
+			refreshToken := strings.TrimSpace(account.GetRefreshToken())
+			accessToken := strings.TrimSpace(account.GetAccessToken())
 			statusValue := emailStatusAvailable
-			lastError := ""
-			if strings.TrimSpace(account.GetRefreshToken()) == "" {
-				statusValue = emailStatusAuthFailed
-				lastError = "registered mailbox has no OAuth refresh token"
+			if refreshToken == "" {
+				statusValue = emailStatusOAuthPending
 			}
 			upsertResp, upsertErr := s.emailClient.UpsertMailbox(ctx, &pb.UpsertEmailMailboxRequest{
 				Mailbox: &pb.EmailMailbox{
 					EmailAddress: email,
 					Password:     password,
-					RefreshToken: strings.TrimSpace(account.GetRefreshToken()),
-					AccessToken:  strings.TrimSpace(account.GetAccessToken()),
+					RefreshToken: refreshToken,
+					AccessToken:  accessToken,
 					Status:       statusValue,
-					LastError:    lastError,
+					LastError:    "",
 					IsPrimary:    true,
 					PrimaryEmail: email,
 				},
@@ -492,17 +492,24 @@ func (s *orchestratorServer) RegisterMailboxAtomicActivity(ctx context.Context, 
 func (s *orchestratorServer) MailboxOAuthAtomicActivity(ctx context.Context, input MailboxOAuthActivityInput) (MailboxOAuthActivityOutput, error) {
 	var output MailboxOAuthActivityOutput
 	_, err := s.runAtomicStep(ctx, input.JobID, stepMailboxOAuth, false, true, func() (any, error) {
-		resp, callErr := s.mailboxRegisterClient.RunMailboxOAuth(ctx, &pb.RunMailboxOAuthRequest{
-			EmailAddress: strings.TrimSpace(input.EmailAddress),
-			OnlyMissing:  input.OnlyMissing,
-			Limit:        input.Limit,
-		})
+		accounts, selectErr := s.mailboxOAuthAccounts(ctx, input)
 		data := map[string]any{
 			"email_address": strings.TrimSpace(input.EmailAddress),
 			"only_missing":  input.OnlyMissing,
 			"limit":         input.Limit,
+			"account_count": len(accounts),
 			"results":       []map[string]any{},
 		}
+		if selectErr != nil {
+			data["error_message"] = selectErr.Error()
+			return data, selectErr
+		}
+		resp, callErr := s.mailboxRegisterClient.RunMailboxOAuth(ctx, &pb.RunMailboxOAuthRequest{
+			EmailAddress: strings.TrimSpace(input.EmailAddress),
+			OnlyMissing:  input.OnlyMissing,
+			Limit:        input.Limit,
+			Accounts:     accounts,
+		})
 		if resp != nil {
 			output.Success = resp.GetSuccess()
 			output.Processed = resp.GetProcessed()
@@ -512,9 +519,10 @@ func (s *orchestratorServer) MailboxOAuthAtomicActivity(ctx context.Context, inp
 			results := make([]map[string]any, 0, len(resp.GetResults()))
 			for _, item := range resp.GetResults() {
 				results = append(results, map[string]any{
-					"email_address": item.GetEmailAddress(),
-					"success":       item.GetSuccess(),
-					"error_message": item.GetErrorMessage(),
+					"email_address":     item.GetEmailAddress(),
+					"success":           item.GetSuccess(),
+					"error_message":     item.GetErrorMessage(),
+					"has_refresh_token": strings.TrimSpace(item.GetRefreshToken()) != "",
 				})
 			}
 			data["success"] = resp.GetSuccess()
@@ -531,6 +539,37 @@ func (s *orchestratorServer) MailboxOAuthAtomicActivity(ctx context.Context, inp
 		if resp == nil {
 			return data, fmt.Errorf("mailbox registration service returned empty OAuth response")
 		}
+		for _, item := range resp.GetResults() {
+			email := strings.ToLower(strings.TrimSpace(item.GetEmailAddress()))
+			refreshToken := strings.TrimSpace(item.GetRefreshToken())
+			if item.GetSuccess() && refreshToken != "" {
+				if _, upsertErr := s.emailClient.UpsertMailbox(ctx, &pb.UpsertEmailMailboxRequest{
+					Mailbox: &pb.EmailMailbox{
+						EmailAddress: email,
+						RefreshToken: refreshToken,
+						AccessToken:  strings.TrimSpace(item.GetAccessToken()),
+						Status:       emailStatusAvailable,
+						LastError:    "",
+						IsPrimary:    true,
+						PrimaryEmail: email,
+					},
+				}); upsertErr != nil {
+					output.Success = false
+					output.ErrorMessage = upsertErr.Error()
+					data["success"] = false
+					data["error_message"] = upsertErr.Error()
+					return data, upsertErr
+				}
+				continue
+			}
+			if email != "" && !item.GetSuccess() {
+				_, _ = s.emailClient.MarkEmailStatus(ctx, &pb.MarkEmailStatusRequest{
+					EmailAddress: email,
+					Status:       emailStatusAuthFailed,
+					LastError:    strings.TrimSpace(item.GetErrorMessage()),
+				})
+			}
+		}
 		if !resp.GetSuccess() {
 			msg := resp.GetErrorMessage()
 			if msg == "" {
@@ -546,6 +585,60 @@ func (s *orchestratorServer) MailboxOAuthAtomicActivity(ctx context.Context, inp
 		return output, err
 	}
 	return output, nil
+}
+
+func (s *orchestratorServer) mailboxOAuthAccounts(ctx context.Context, input MailboxOAuthActivityInput) ([]*pb.MailboxRegistrationAccount, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	requestedEmail := strings.ToLower(strings.TrimSpace(input.EmailAddress))
+	if requestedEmail != "" {
+		limit = 500
+	}
+
+	resp, err := s.emailClient.ListMailboxes(ctx, &pb.ListEmailMailboxesRequest{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+
+	accounts := make([]*pb.MailboxRegistrationAccount, 0)
+	for _, mailbox := range resp.GetMailboxes() {
+		email := strings.ToLower(strings.TrimSpace(mailbox.GetEmailAddress()))
+		if email == "" {
+			continue
+		}
+		if requestedEmail != "" && email != requestedEmail {
+			continue
+		}
+		if !mailbox.GetIsPrimary() {
+			continue
+		}
+		if strings.TrimSpace(mailbox.GetPassword()) == "" {
+			continue
+		}
+		if input.OnlyMissing && strings.TrimSpace(mailbox.GetRefreshToken()) != "" {
+			continue
+		}
+		accounts = append(accounts, &pb.MailboxRegistrationAccount{
+			EmailAddress: email,
+			Password:     strings.TrimSpace(mailbox.GetPassword()),
+			RefreshToken: strings.TrimSpace(mailbox.GetRefreshToken()),
+			AccessToken:  strings.TrimSpace(mailbox.GetAccessToken()),
+			Source:       "mailboxes",
+		})
+		if requestedEmail == "" && len(accounts) >= int(limit) {
+			break
+		}
+	}
+
+	if requestedEmail != "" && len(accounts) == 0 {
+		return nil, fmt.Errorf("mailbox not found or not eligible for OAuth: %s", requestedEmail)
+	}
+	return accounts, nil
 }
 
 func (s *orchestratorServer) PersistRegisteredActivity(ctx context.Context, input PersistRegisteredInput) error {

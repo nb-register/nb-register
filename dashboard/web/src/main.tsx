@@ -85,7 +85,7 @@ type ViewKey = 'accounts' | 'mailboxes' | 'mailboxRegistration' | 'jobs';
 
 const statusOptions = ['', 'CREATED', 'REGISTERED', 'ACTIVATED', 'EMAIL_ALREADY_EXISTS', 'REGISTER_FAILED', 'PAYMENT_FAILED'];
 const jobStatusOptions = ['', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_RECOVERABLE', 'FAILED_FINAL'];
-const mailboxStatusOptions = ['', 'AVAILABLE', 'ASSIGNED', 'REGISTERED', 'USER_ALREADY_EXISTS', 'REGISTRATION_FAILED', 'AUTH_FAILED', 'BLOCKED'];
+const mailboxStatusOptions = ['', 'AVAILABLE', 'ASSIGNED', 'REGISTERED', 'OAUTH_PENDING', 'USER_ALREADY_EXISTS', 'REGISTRATION_FAILED', 'AUTH_FAILED', 'BLOCKED'];
 
 function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -936,6 +936,7 @@ function MailboxStatusStrip({ mailboxes }: { mailboxes: Mailbox[] }) {
     ['AVAILABLE', '可用'],
     ['ASSIGNED', '已分配'],
     ['REGISTERED', '已注册'],
+    ['OAUTH_PENDING', '待 OAuth'],
     ['AUTH_FAILED', '认证失败'],
     ['BLOCKED', '已封禁']
   ];

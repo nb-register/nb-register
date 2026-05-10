@@ -333,14 +333,144 @@ def new_or_updated_records(before: dict[str, MailboxRecord], after: list[Mailbox
     return changed
 
 
-def run_oauth(email_address: str = "", only_missing: bool = True, limit: int = 100) -> dict:
+def _mailbox_record_from_value(value) -> MailboxRecord:
+    if isinstance(value, MailboxRecord):
+        return value
+    if isinstance(value, dict):
+        return MailboxRecord(
+            email=str(value.get("email_address") or value.get("email") or "").strip().lower(),
+            password=str(value.get("password") or "").strip(),
+            refresh_token=str(value.get("refresh_token") or "").strip(),
+            access_token=str(value.get("access_token") or "").strip(),
+            source=str(value.get("source") or "").strip(),
+        )
+    return MailboxRecord(
+        email=str(getattr(value, "email_address", "") or getattr(value, "email", "")).strip().lower(),
+        password=str(getattr(value, "password", "") or "").strip(),
+        refresh_token=str(getattr(value, "refresh_token", "") or "").strip(),
+        access_token=str(getattr(value, "access_token", "") or "").strip(),
+        source=str(getattr(value, "source", "") or "").strip(),
+    )
+
+
+def append_token_record(record: MailboxRecord) -> None:
+    if not record.refresh_token:
+        return
+    out_dir = results_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    token_file = out_dir / "outlook_token.txt"
+    with token_file.open("a", encoding="utf-8") as handle:
+        handle.write(
+            f"{record.email}---{record.password}---{record.refresh_token}---{record.access_token}---0\n"
+        )
+
+
+def run_oauth(
+    email_address: str = "",
+    only_missing: bool = True,
+    limit: int = 100,
+    accounts: Iterable[MailboxRecord | dict] | None = None,
+) -> dict:
+    from camoufox_register import outlook_oauth
+
+    requested_email = email_address.strip().lower()
+    supplied = [_mailbox_record_from_value(account) for account in (accounts or [])]
+    if not supplied:
+        return {
+            "success": False,
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "error_message": "no mailbox accounts supplied for OAuth",
+            "results": [],
+        }
+
+    max_items = min(max(limit or 100, 1), 500)
+    targets: list[MailboxRecord] = []
+    for record in supplied:
+        if not record.email:
+            continue
+        if requested_email and record.email != requested_email:
+            continue
+        if only_missing and record.refresh_token:
+            continue
+        targets.append(record)
+        if len(targets) >= max_items:
+            break
+
+    if not targets:
+        return {
+            "success": True,
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "error_message": "",
+            "results": [],
+        }
+
+    client_id = (
+        env_str("OUTLOOK_REGISTER_OAUTH_CLIENT_ID")
+        or env_str("OUTLOOK_OAUTH_CLIENT_ID")
+        or DEFAULT_OAUTH_CLIENT_ID
+    )
+    redirect_url = (
+        env_str("OUTLOOK_REGISTER_OAUTH_REDIRECT_URL")
+        or env_str("OUTLOOK_OAUTH_REDIRECT_URL")
+        or DEFAULT_OAUTH_REDIRECT_URL
+    )
+    scopes = split_scopes(env_str("OUTLOOK_REGISTER_OAUTH_SCOPES", DEFAULT_SCOPES))
+    proxy = env_str("OUTLOOK_REGISTER_PROXY")
+
+    results = []
+    succeeded = 0
+    failed = 0
+    for target in targets:
+        if not target.password:
+            failed += 1
+            results.append({
+                "email_address": target.email,
+                "success": False,
+                "error_message": "mailbox password is required for OAuth",
+            })
+            continue
+
+        oauth = outlook_oauth(
+            email=target.email,
+            password=target.password,
+            proxy=proxy,
+            client_id=client_id,
+            redirect_url=redirect_url,
+            scopes=scopes,
+        )
+        if oauth.get("success"):
+            succeeded += 1
+            token_record = MailboxRecord(
+                email=target.email,
+                password=target.password,
+                refresh_token=str(oauth.get("refresh_token") or ""),
+                access_token=str(oauth.get("access_token") or ""),
+                source="oauth",
+            )
+            append_token_record(token_record)
+            results.append(record_response(token_record) | {
+                "success": True,
+                "error_message": "",
+            })
+        else:
+            failed += 1
+            results.append({
+                "email_address": target.email,
+                "success": False,
+                "error_message": str(oauth.get("error") or "OAuth failed"),
+            })
+
     return {
-        "success": False,
-        "processed": 0,
-        "succeeded": 0,
-        "failed": 0,
-        "error_message": "Browser-based OAuth is not handled by outlook-register-service.",
-        "results": [],
+        "success": failed == 0 and succeeded > 0,
+        "processed": len(targets),
+        "succeeded": succeeded,
+        "failed": failed,
+        "error_message": "" if failed == 0 else f"mailbox OAuth failed: {failed}/{len(targets)}",
+        "results": results,
     }
 
 

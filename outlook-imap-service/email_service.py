@@ -37,6 +37,7 @@ DEFAULT_ALIAS_TOKEN_LENGTH = 6
 STATUS_AVAILABLE = "AVAILABLE"
 STATUS_ASSIGNED = "ASSIGNED"
 STATUS_REGISTERED = "REGISTERED"
+STATUS_OAUTH_PENDING = "OAUTH_PENDING"
 STATUS_USER_ALREADY_EXISTS = "USER_ALREADY_EXISTS"
 STATUS_AUTH_FAILED = "AUTH_FAILED"
 STATUS_BLOCKED = "BLOCKED"
@@ -164,6 +165,11 @@ class MailboxStore:
             "ALTER TABLE mailboxes DROP COLUMN IF EXISTS assigned_account_id",
             "CREATE INDEX IF NOT EXISTS idx_mailboxes_status ON mailboxes(status)",
             "CREATE INDEX IF NOT EXISTS idx_mailboxes_primary ON mailboxes(primary_email)",
+            (
+                "UPDATE mailboxes SET status = 'OAUTH_PENDING', last_error = '' "
+                "WHERE status = 'AUTH_FAILED' "
+                "AND last_error = 'registered mailbox has no OAuth refresh token'"
+            ),
         ]
         with self.connect() as conn:
             with conn.cursor() as cur:
@@ -194,7 +200,7 @@ class MailboxStore:
                         last_error, is_primary, primary_email, created_at, updated_at
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (email) DO UPDATE SET
-                        password = EXCLUDED.password,
+                        password = CASE WHEN EXCLUDED.password <> '' THEN EXCLUDED.password ELSE mailboxes.password END,
                         refresh_token = CASE WHEN EXCLUDED.refresh_token <> '' THEN EXCLUDED.refresh_token ELSE mailboxes.refresh_token END,
                         access_token = CASE WHEN EXCLUDED.access_token <> '' THEN EXCLUDED.access_token ELSE mailboxes.access_token END,
                         status = CASE WHEN %s <> '' THEN EXCLUDED.status ELSE mailboxes.status END,

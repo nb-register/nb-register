@@ -43,6 +43,7 @@ const (
 
 	emailStatusAvailable         = "AVAILABLE"
 	emailStatusRegistered        = "REGISTERED"
+	emailStatusOAuthPending      = "OAUTH_PENDING"
 	emailStatusUserAlreadyExists = "USER_ALREADY_EXISTS"
 	emailStatusRegistrationFail  = "REGISTRATION_FAILED"
 	emailStatusAuthFailed        = "AUTH_FAILED"

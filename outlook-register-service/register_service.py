@@ -74,16 +74,29 @@ class MailboxRegistrationService(mailbox_register_pb2_grpc.MailboxRegistrationSe
     def RunMailboxOAuth(self, request, context):
         del context
         try:
+            accounts = [
+                {
+                    "email_address": account.email_address,
+                    "password": account.password,
+                    "refresh_token": account.refresh_token,
+                    "access_token": account.access_token,
+                    "source": account.source,
+                }
+                for account in request.accounts
+            ]
             result = register_provider.run_oauth(
                 email_address=request.email_address,
                 only_missing=request.only_missing,
                 limit=request.limit,
+                accounts=accounts,
             )
             results = [
                 mailbox_register_pb2.MailboxOAuthResult(
                     email_address=item.get("email_address", ""),
                     success=bool(item.get("success")),
                     error_message=item.get("error_message", ""),
+                    refresh_token=item.get("refresh_token", ""),
+                    access_token=item.get("access_token", ""),
                 )
                 for item in result.get("results", [])
             ]
