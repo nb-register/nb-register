@@ -24,9 +24,9 @@ gen_py() {
 gen_go account-db
 gen_go orchestrator
 gen_go dashboard
+gen_go outlook-imap-service
 
 gen_py browser-reg "${ROOT}/browser-reg/proto/browser.proto"
-gen_py outlook-imap-service "${ROOT}/outlook-imap-service/proto/email.proto"
 gen_py outlook-register-service "${ROOT}/outlook-register-service/proto/mailbox_register.proto"
 
 python3 -m grpc_tools.protoc -I "${ROOT}/gopay-payment/gopay-flow/proto" \

@@ -24,6 +24,7 @@ tokens/
 # Go workspace / OS
 go.work
 go.work.sum
+pb/
 .DS_Store
 ._*
 Thumbs.db

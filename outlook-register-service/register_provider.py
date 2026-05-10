@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Iterable
 DEFAULT_REPO_DIR = Path(os.environ.get("OUTLOOK_REGISTER_DIR", "/opt/OutlookRegister"))
 DEFAULT_RESULTS_DIR = DEFAULT_REPO_DIR / "Results"
@@ -19,6 +20,8 @@ DEFAULT_OAUTH_CLIENT_ID = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
 DEFAULT_OAUTH_REDIRECT_URL = "https://login.microsoftonline.com/common/oauth2/nativeclient"
 DEFAULT_SCOPES = "offline_access https://graph.microsoft.com/Mail.Read"
 LOCK_FILE_NAME = ".nb_register.lock"
+PROXY_POOL_INDEX_FILE_NAME = ".proxy_pool_index"
+PROXY_POOL_LOCK_FILE_NAME = ".proxy_pool.lock"
 
 logger = logging.getLogger("outlook-imap-register")
 
@@ -76,6 +79,89 @@ def results_dir() -> Path:
     return Path(env_str("OUTLOOK_REGISTER_RESULTS_DIR", str(repo_dir() / "Results"))).resolve()
 
 
+def proxy_pool_entries() -> list[str]:
+    entries: list[str] = []
+    raw_pool = env_str("OUTLOOK_REGISTER_PROXY_POOL")
+    if raw_pool:
+        for part in raw_pool.replace(",", "\n").splitlines():
+            entries.extend(item.strip() for item in part.split() if item.strip())
+
+    proxy_file = env_str("OUTLOOK_REGISTER_PROXY_FILE")
+    if proxy_file:
+        path = Path(proxy_file).expanduser()
+        if path.exists():
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line and not line.startswith("#"):
+                    entries.append(line)
+        else:
+            logger.warning("OUTLOOK_REGISTER_PROXY_FILE does not exist: %s", path)
+
+    fallback = env_str("OUTLOOK_REGISTER_PROXY")
+    if fallback and not entries:
+        entries.append(fallback)
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry not in seen:
+            seen.add(entry)
+            unique.append(entry)
+    return unique
+
+
+def redact_proxy(proxy: str) -> str:
+    if not proxy:
+        return ""
+    try:
+        parsed = urlparse(proxy)
+        if not parsed.scheme or not parsed.hostname:
+            return "<proxy>"
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://{parsed.hostname}{port}"
+    except Exception:
+        return "<proxy>"
+
+
+def next_proxy() -> str:
+    entries = proxy_pool_entries()
+    if not entries:
+        return ""
+    if len(entries) == 1:
+        return entries[0]
+
+    out_dir = results_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = out_dir / PROXY_POOL_LOCK_FILE_NAME
+    index_path = out_dir / PROXY_POOL_INDEX_FILE_NAME
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                index = int(index_path.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                index = 0
+            selected = entries[index % len(entries)]
+            index_path.write_text(str(index + 1) + "\n", encoding="utf-8")
+            return selected
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def proxy_env(proxy: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not proxy:
+        return values
+    values["OUTLOOK_REGISTER_PROXY"] = proxy
+    values["HTTP_PROXY"] = proxy
+    values["HTTPS_PROXY"] = proxy
+    values["http_proxy"] = proxy
+    values["https_proxy"] = proxy
+    values.setdefault("NO_PROXY", "localhost,127.0.0.1")
+    values.setdefault("no_proxy", "localhost,127.0.0.1")
+    return values
+
+
 def redact_email(email: str) -> str:
     local, sep, domain = email.partition("@")
     if not sep:
@@ -87,7 +173,7 @@ def redact_email(email: str) -> str:
     return f"{local}@{domain}"
 
 
-def build_register_config() -> dict:
+def build_register_config(proxy: str | None = None) -> dict:
     enable_oauth2 = env_bool("OUTLOOK_REGISTER_ENABLE_OAUTH2", True)
     client_id = (
         env_str("OUTLOOK_REGISTER_OAUTH_CLIENT_ID")
@@ -108,7 +194,7 @@ def build_register_config() -> dict:
     return {
         "choose_browser": env_str("OUTLOOK_REGISTER_BROWSER", "patchright"),
         "email_suffix": env_str("OUTLOOK_REGISTER_EMAIL_SUFFIX", "@outlook.com"),
-        "proxy": env_str("OUTLOOK_REGISTER_PROXY"),
+        "proxy": env_str("OUTLOOK_REGISTER_PROXY") if proxy is None else proxy,
         "bot_protection_wait": env_int("OUTLOOK_REGISTER_BOT_PROTECTION_WAIT", 11),
         "max_captcha_retries": env_int("OUTLOOK_REGISTER_MAX_CAPTCHA_RETRIES", 2),
         "manual_captcha": env_bool("OUTLOOK_REGISTER_MANUAL_CAPTCHA", False),
@@ -167,16 +253,16 @@ def registration_lock():
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def write_register_config(path: Path) -> None:
+def write_register_config(path: Path, proxy: str = "") -> None:
     config_path = path / "config.json"
     config_path.write_text(
-        json.dumps(build_register_config(), ensure_ascii=False, indent=4) + "\n",
+        json.dumps(build_register_config(proxy=proxy), ensure_ascii=False, indent=4) + "\n",
         encoding="utf-8",
     )
     logger.info("wrote OutlookRegister config to %s", config_path)
 
 
-def run_outlook_register(path: Path) -> int:
+def run_outlook_register(path: Path, proxy: str = "") -> int:
     script_path = Path("/app/camoufox_register.py")
     if not script_path.exists():
         logger.warning(f"Camoufox script not found at {script_path}, looking in current dir")
@@ -188,18 +274,14 @@ def run_outlook_register(path: Path) -> int:
     if env_bool("OUTLOOK_REGISTER_USE_XVFB", False) and not os.environ.get("DISPLAY"):
         command = ["xvfb-run", "-a", *command]
 
-    logger.info("starting Camoufox registration")
+    if proxy:
+        logger.info("starting Camoufox registration with proxy %s", redact_proxy(proxy))
+    else:
+        logger.info("starting Camoufox registration without proxy")
     timeout = env_int("OUTLOOK_REGISTER_RUN_TIMEOUT_SECONDS", 900)
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    proxy = env_str("OUTLOOK_REGISTER_PROXY")
-    if proxy:
-        env.setdefault("HTTP_PROXY", proxy)
-        env.setdefault("HTTPS_PROXY", proxy)
-        env.setdefault("http_proxy", proxy)
-        env.setdefault("https_proxy", proxy)
-        env.setdefault("NO_PROXY", "localhost,127.0.0.1")
-        env.setdefault("no_proxy", "localhost,127.0.0.1")
+    env.update(proxy_env(proxy))
     process = subprocess.Popen(command, cwd="/app", env=env, start_new_session=True)
     try:
         code = process.wait(timeout=timeout if timeout > 0 else None)
@@ -217,17 +299,10 @@ def run_outlook_register(path: Path) -> int:
     return code
 
 
-def browser_subprocess_env() -> dict[str, str]:
+def browser_subprocess_env(proxy: str = "") -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    proxy = env_str("OUTLOOK_REGISTER_PROXY")
-    if proxy:
-        env["HTTP_PROXY"] = proxy
-        env["HTTPS_PROXY"] = proxy
-        env["http_proxy"] = proxy
-        env["https_proxy"] = proxy
-        env.setdefault("NO_PROXY", "localhost,127.0.0.1")
-        env.setdefault("no_proxy", "localhost,127.0.0.1")
+    env.update(proxy_env(proxy or env_str("OUTLOOK_REGISTER_PROXY")))
     return env
 
 
@@ -419,7 +494,6 @@ def run_oauth(
         or DEFAULT_OAUTH_REDIRECT_URL
     )
     scopes = split_scopes(env_str("OUTLOOK_REGISTER_OAUTH_SCOPES", DEFAULT_SCOPES))
-    proxy = env_str("OUTLOOK_REGISTER_PROXY")
 
     results = []
     succeeded = 0
@@ -434,6 +508,11 @@ def run_oauth(
             })
             continue
 
+        proxy = next_proxy()
+        if proxy:
+            logger.info("starting mailbox OAuth for %s with proxy %s", redact_email(target.email), redact_proxy(proxy))
+        else:
+            logger.info("starting mailbox OAuth for %s without proxy", redact_email(target.email))
         oauth = outlook_oauth(
             email=target.email,
             password=target.password,
@@ -522,8 +601,9 @@ def run_registration_request_locked(enabled: bool, import_only: bool) -> dict:
             "accounts": [],
         }
 
-    write_register_config(path)
-    code = run_outlook_register(path)
+    proxy = next_proxy()
+    write_register_config(path, proxy=proxy)
+    code = run_outlook_register(path, proxy=proxy)
     after_records = collect_records(out_dir, include_password_only=True)
     records = new_or_updated_records(before_records, after_records)
 
