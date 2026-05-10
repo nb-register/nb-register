@@ -11,7 +11,7 @@ html, body, #root {
   overflow: hidden;
 }
 body { margin: 0; }
-button, input, select, a { font: inherit; }
+button, input, select { font: inherit; }
 
 .shell {
   height: 100%;
@@ -43,21 +43,20 @@ p { margin: 0; color: #5d675f; }
   gap: 8px;
 }
 
-button, select, input, .downloadLink {
+button, select, input {
   border: 1px solid #c9d0c8;
   background: #f9faf8;
   color: #17211b;
   border-radius: 8px;
 }
 
-button, .downloadLink {
+button {
   min-height: 34px;
   padding: 7px 10px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  text-decoration: none;
 }
 
 button[data-tooltip] {

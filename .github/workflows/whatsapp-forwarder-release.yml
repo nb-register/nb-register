@@ -1,0 +1,77 @@
+name: Publish WhatsApp Forwarder APK
+
+on:
+  push:
+    tags:
+      - "whatsapp-forwarder-v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to create or update"
+        required: true
+        default: "whatsapp-forwarder-v1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Prepare Android SDK
+        run: |
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${PATH}"
+          fi
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-36" "build-tools;34.0.0"
+
+      - name: Build APK
+        working-directory: whatsapp-forwarder
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp whatsapp-forwarder/app/build/outputs/apk/debug/app-debug.apk release/whatsapp-forwarder.apk
+          sha256sum release/whatsapp-forwarder.apk > release/whatsapp-forwarder.apk.sha256
+          {
+            echo "WhatsApp Forwarder APK"
+            echo
+            echo "Built from commit: ${GITHUB_SHA}"
+            echo
+            echo "SHA256:"
+            cat release/whatsapp-forwarder.apk.sha256
+          } > release/notes.md
+
+      - name: Publish GitHub release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          tag_name="${GITHUB_REF_NAME}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag_name="$INPUT_TAG_NAME"
+          fi
+
+          if gh release view "$tag_name" >/dev/null 2>&1; then
+            gh release upload "$tag_name" release/whatsapp-forwarder.apk release/whatsapp-forwarder.apk.sha256 --clobber
+          else
+            gh release create "$tag_name" release/whatsapp-forwarder.apk release/whatsapp-forwarder.apk.sha256 \
+              --target "$GITHUB_SHA" \
+              --title "WhatsApp Forwarder ${tag_name#whatsapp-forwarder-v}" \
+              --notes-file release/notes.md
+          fi

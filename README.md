@@ -129,7 +129,7 @@ cd whatsapp-forwarder
 ./gradlew assembleDebug
 ```
 
-本地安装 `whatsapp-forwarder/app/build/outputs/apk/debug/app-debug.apk`，或在看板顶部下载线上产物 `WhatsApp APK`。安装后在应用里填写上面的 webhook URL，并在系统设置中启用 `WhatsApp Forwarder` 通知访问。
+本地安装 `whatsapp-forwarder/app/build/outputs/apk/debug/app-debug.apk`，或从 GitHub Releases 下载 `whatsapp-forwarder.apk`。安装后在应用里填写上面的 webhook URL，并在系统设置中启用 `WhatsApp Forwarder` 通知访问。
 
 本机测试：
 
