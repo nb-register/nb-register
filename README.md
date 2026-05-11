@@ -51,8 +51,8 @@ curl -fsS http://127.0.0.1:8080/api/health
 推荐按这个顺序使用：
 
 1. 配好代理和 GoPay 参数，启动整套 compose。
-2. 在看板「邮箱注册」里注册 Outlook 邮箱，或在「邮箱管理」里手动导入已有 Outlook 邮箱和密码。
-3. 在「邮箱管理」里点击单个邮箱 OAuth，或点击「补 OAuth」批量补齐 refresh token。
+2. 在看板「邮箱注册」里注册 Outlook 邮箱；注册成功后会自动尝试一次 OAuth。也可以在「邮箱管理」里手动导入已有 Outlook 邮箱和密码。
+3. 如果自动 OAuth 失败，或导入的是已有邮箱，在「邮箱管理」里点击单个邮箱 OAuth，或点击「补 OAuth」批量补齐 refresh token。
 4. 完成 OAuth 的邮箱会进入账号注册取邮箱池。
 5. 在「账号」页创建/注册账号；注册流程会从邮箱服务领取可用邮箱并等待 OTP。
 6. 需要支付时，在账号详情里补 session token / access token，再触发 GoPay 激活。
@@ -71,7 +71,7 @@ curl -fsS http://127.0.0.1:8080/api/health
 
 `outlook-imap-service` 负责邮箱池、OAuth token 刷新和按需收信取 OTP。邮箱管理和 OpenAI 账号注册是分开的：邮箱页面只管理 Outlook 邮箱，账号注册流程只从邮箱池领取可用邮箱。
 
-每个可用于注册取码的 Outlook 邮箱都需要完成 Microsoft OAuth。可以通过看板「邮箱注册」自动注册 Outlook 邮箱；也可以在看板「邮箱管理」里手动添加已有 Outlook 邮箱和密码，再点击「补 OAuth」自动补齐 token。
+每个可用于注册取码的 Outlook 邮箱都需要完成 Microsoft OAuth。可以通过看板「邮箱注册」自动注册 Outlook 邮箱；注册成功后会按 `OUTLOOK_REGISTER_ENABLE_OAUTH2=true` 自动尝试一次 OAuth。这个动作是 best-effort side effect，失败不会影响邮箱注册导入，邮箱会保持 `OAUTH_PENDING`，之后可在「邮箱管理」里点击「补 OAuth」补齐 token。也可以在看板「邮箱管理」里手动添加已有 Outlook 邮箱和密码，再点击「补 OAuth」自动补齐 token。
 
 注册流程等待 OTP 时会自动从 Outlook 拉取近期邮件。缺少 OAuth 的邮箱不会进入注册取码池。
 
@@ -87,6 +87,8 @@ OUTLOOK_REGISTER_PROXY=socks5://host.docker.internal:10810
 # 支持逗号、空格或换行分隔；也可以用 OUTLOOK_REGISTER_PROXY_FILE 指向容器内文件。
 OUTLOOK_REGISTER_PROXY_POOL=
 OUTLOOK_REGISTER_PROXY_FILE=
+# 注册成功后自动尝试 OAuth；失败不影响邮箱注册导入。
+OUTLOOK_REGISTER_ENABLE_OAUTH2=true
 ```
 
 其他 Outlook 注册参数通常保持 `compose.example.env` 默认值即可。
@@ -104,7 +106,7 @@ Outlook 注册和 OAuth 对代理质量比较敏感，推荐使用代理池：
 
 验证码默认走自动流程；遇到当前脚本不能处理的验证码类型、风控页或代理质量问题时，注册会失败并在 `outlook-register-service/register-results/` 留下截图和日志，换代理后重新触发即可。
 
-看板「邮箱注册」用于自动注册 Outlook 邮箱并导入邮箱池；看板「邮箱管理」里的 OAuth 按钮用于自动登录微软并换取 refresh token。dashboard 不挂 Docker socket，也不执行宿主机命令。
+看板「邮箱注册」用于自动注册 Outlook 邮箱并导入邮箱池，并对新邮箱 best-effort 自动 OAuth；看板「邮箱管理」里的 OAuth 按钮用于补跑或手动触发 OAuth，自动登录微软并换取 refresh token。dashboard 不挂 Docker socket，也不执行宿主机命令。
 
 注册过程日志：
 

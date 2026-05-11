@@ -427,6 +427,85 @@ def new_or_updated_records(before: dict[str, MailboxRecord], after: list[Mailbox
     return changed
 
 
+def records_with_oauth_results(records: list[MailboxRecord], oauth_result: dict) -> list[MailboxRecord]:
+    token_records: dict[str, MailboxRecord] = {}
+    for item in oauth_result.get("results", []):
+        email = str(item.get("email_address") or item.get("email") or "").strip().lower()
+        refresh_token = str(item.get("refresh_token") or "").strip()
+        if not bool(item.get("success")) or not email or not refresh_token:
+            continue
+        token_records[email] = MailboxRecord(
+            email=email,
+            password=str(item.get("password") or "").strip(),
+            refresh_token=refresh_token,
+            access_token=str(item.get("access_token") or "").strip(),
+            source=str(item.get("source") or "oauth").strip() or "oauth",
+        )
+
+    merged: list[MailboxRecord] = []
+    for record in records:
+        token_record = token_records.get(record.email)
+        if token_record is None:
+            merged.append(record)
+            continue
+        if not token_record.password:
+            token_record = MailboxRecord(
+                email=token_record.email,
+                password=record.password,
+                refresh_token=token_record.refresh_token,
+                access_token=token_record.access_token,
+                source=token_record.source,
+            )
+        merged.append(token_record)
+    return merged
+
+
+def run_auto_oauth_for_records(records: list[MailboxRecord]) -> tuple[list[MailboxRecord], dict]:
+    summary = {
+        "enabled": env_bool("OUTLOOK_REGISTER_ENABLE_OAUTH2", True),
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "error_message": "",
+    }
+    if not summary["enabled"]:
+        return records, summary
+
+    targets = [record for record in records if record.email and record.password and not record.refresh_token]
+    if not targets:
+        return records, summary
+
+    logger.info("starting automatic mailbox OAuth for %d newly registered mailbox(es)", len(targets))
+    try:
+        oauth_result = run_oauth(
+            only_missing=True,
+            limit=len(targets),
+            accounts=targets,
+        )
+        if not isinstance(oauth_result, dict):
+            raise TypeError("mailbox OAuth returned non-dict result")
+        summary["processed"] = int(oauth_result.get("processed", 0))
+        summary["succeeded"] = int(oauth_result.get("succeeded", 0))
+        summary["failed"] = int(oauth_result.get("failed", 0))
+        summary["error_message"] = str(oauth_result.get("error_message") or "")
+        updated = records_with_oauth_results(records, oauth_result)
+    except Exception as exc:
+        logger.exception("automatic mailbox OAuth failed")
+        summary["processed"] = len(targets)
+        summary["failed"] = len(targets)
+        summary["error_message"] = str(exc)
+        return records, summary
+
+    if summary["failed"]:
+        logger.warning(
+            "automatic mailbox OAuth failed for %s/%s mailbox(es): %s",
+            summary["failed"],
+            summary["processed"],
+            summary["error_message"],
+        )
+    return updated, summary
+
+
 def _mailbox_record_from_value(value) -> MailboxRecord:
     if isinstance(value, MailboxRecord):
         return value
@@ -626,6 +705,8 @@ def run_registration_request_locked(enabled: bool, import_only: bool) -> dict:
     code = run_outlook_register(path, proxy=proxy)
     after_records = collect_records(out_dir, include_password_only=True)
     records = new_or_updated_records(before_records, after_records)
+    if records:
+        records, _ = run_auto_oauth_for_records(records)
 
     error_message = ""
     if not records:
