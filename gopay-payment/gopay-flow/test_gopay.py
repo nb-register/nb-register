@@ -5,6 +5,7 @@ from gopay import (
     GoPayCharger,
     GoPayError,
     GoPayOTPRejected,
+    _extract_midtrans_charge_reference,
     _request_with_retries,
     _resolve_expected_amount,
     _stripe_confirm_error_detail,
@@ -100,6 +101,30 @@ class RetryTransportTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(session.calls, 2)
+
+
+class MidtransChargeReferenceTests(unittest.TestCase):
+    def test_extracts_reference_from_legacy_verification_link(self):
+        ref = _extract_midtrans_charge_reference({
+            "gopay_verification_link_url": "https://example.test/pay?reference=A123BC",
+        })
+
+        self.assertEqual(ref, "A123BC")
+
+    def test_extracts_reference_from_nested_action_url(self):
+        ref = _extract_midtrans_charge_reference({
+            "actions": [
+                {"name": "get-status", "url": "https://example.test/status"},
+                {"name": "verify", "url": "gojek://pay#reference=A987ZZ"},
+            ],
+        })
+
+        self.assertEqual(ref, "A987ZZ")
+
+    def test_extracts_reference_from_explicit_reference_field(self):
+        ref = _extract_midtrans_charge_reference({"payment_reference": "A555AA"})
+
+        self.assertEqual(ref, "A555AA")
 
 
 class StripeExpectedAmountTests(unittest.TestCase):

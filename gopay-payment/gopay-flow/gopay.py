@@ -45,6 +45,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -128,6 +129,54 @@ class GoPayPINRejected(GoPayError):
 def _is_retryable_transport_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(hint in text for hint in RETRYABLE_TRANSPORT_HINTS)
+
+
+def _json_excerpt(value: Any, limit: int = 600) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        text = str(value)
+    return text[:limit]
+
+
+def _iter_json_strings(value: Any, path: str = ""):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            item_path = f"{path}.{key}" if path else str(key)
+            yield from _iter_json_strings(item, item_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _iter_json_strings(item, f"{path}[{index}]")
+    elif isinstance(value, str):
+        yield path, value
+
+
+def _extract_reference_from_text(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+
+    parsed = urlparse(text)
+    query = parse_qs(parsed.query)
+    for key in ("reference", "reference_id", "referenceId"):
+        value = next((item.strip() for item in query.get(key, []) if item.strip()), "")
+        if value:
+            return value
+
+    match = re.search(r"(?:[?&#]|^)(?:reference|reference_id|referenceId)=([A-Za-z0-9-]+)", text)
+    return match.group(1) if match else ""
+
+
+def _extract_midtrans_charge_reference(data: Any) -> str:
+    for _, text in _iter_json_strings(data):
+        reference = _extract_reference_from_text(text)
+        if reference:
+            return reference
+
+    for path, text in _iter_json_strings(data):
+        if "reference" in path.lower() and re.fullmatch(r"[A-Za-z0-9-]{6,}", text.strip()):
+            return text.strip()
+    return ""
 
 
 def _request_with_retries(
@@ -866,11 +915,9 @@ class GoPayCharger:
         )
         r.raise_for_status()
         data = r.json()
-        link = data.get("gopay_verification_link_url", "")
-        m = re.search(r"reference=([A-Za-z0-9]+)", link)
-        if not m:
-            raise GoPayError(f"midtrans charge: no reference in {link!r}")
-        charge_ref = m.group(1)
+        charge_ref = _extract_midtrans_charge_reference(data)
+        if not charge_ref:
+            raise GoPayError(f"midtrans charge: no reference in response {_json_excerpt(data)}")
         self.log(f"[gopay] midtrans charge ref={charge_ref}")
         return charge_ref
 

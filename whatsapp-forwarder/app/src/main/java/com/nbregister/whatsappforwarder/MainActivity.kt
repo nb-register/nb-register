@@ -37,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.nbregister.whatsappforwarder.network.OtpWebhookClient
+import com.nbregister.whatsappforwarder.service.NotificationListenerRebinder
 import com.nbregister.whatsappforwarder.service.WhatsAppNotificationListenerService
 import com.nbregister.whatsappforwarder.settings.SettingsStore
 import com.nbregister.whatsappforwarder.ui.AppTheme
@@ -47,6 +48,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NotificationListenerRebinder.request(this)
         setContent {
             AppTheme {
                 WhatsAppForwarderScreen()

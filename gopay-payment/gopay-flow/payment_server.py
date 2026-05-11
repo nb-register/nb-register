@@ -101,51 +101,32 @@ def _looks_access_token(value: str) -> bool:
 class PendingFlow:
     charger: GoPayCharger
     state: dict[str, Any]
-    expires_at: float
 
     def close(self) -> None:
         self.charger.close()
 
 
 class FlowStore:
-    def __init__(self, ttl_seconds: int):
-        self._ttl_seconds = max(60, int(ttl_seconds))
+    def __init__(self):
         self._lock = threading.Lock()
         self._flows: dict[str, PendingFlow] = {}
-        self._closed = threading.Event()
-        self._reaper = threading.Thread(target=self._reap_loop, name="payment-flow-reaper", daemon=True)
-        self._reaper.start()
 
-    def put(self, charger: GoPayCharger, state: dict[str, Any]) -> tuple[str, int]:
+    def put(self, charger: GoPayCharger, state: dict[str, Any]) -> str:
         flow_id = uuid.uuid4().hex
-        expires_at = time.time() + self._ttl_seconds
         with self._lock:
-            self._flows[flow_id] = PendingFlow(charger=charger, state=state, expires_at=expires_at)
-        return flow_id, int(expires_at)
+            self._flows[flow_id] = PendingFlow(charger=charger, state=state)
+        return flow_id
 
     def pop(self, flow_id: str) -> PendingFlow | None:
         with self._lock:
             return self._flows.pop(flow_id, None)
 
     def close(self) -> None:
-        self._closed.set()
         with self._lock:
             flows = list(self._flows.values())
             self._flows.clear()
         for flow in flows:
             flow.close()
-
-    def _reap_loop(self) -> None:
-        while not self._closed.wait(30):
-            now = time.time()
-            expired: list[PendingFlow] = []
-            with self._lock:
-                for flow_id, flow in list(self._flows.items()):
-                    if flow.expires_at <= now:
-                        expired.append(self._flows.pop(flow_id))
-            for flow in expired:
-                logger.info("[payment] closing expired flow")
-                flow.close()
 
 
 class OtpStore:
@@ -358,9 +339,9 @@ class OtpWebhookServer:
 
 
 class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
-    def __init__(self, cfg: dict[str, Any], flow_ttl_seconds: int):
+    def __init__(self, cfg: dict[str, Any]):
         self._cfg = cfg
-        self._flows = FlowStore(flow_ttl_seconds)
+        self._flows = FlowStore()
 
     def close(self) -> None:
         self._flows.close()
@@ -483,7 +464,7 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
 
             logger.info("[payment] StartGoPay start")
             state = charger.start_until_otp(stripe_pk=stripe_pk, billing=_billing_from_config(cfg))
-            flow_id, expires_at = self._flows.put(charger, state)
+            flow_id = self._flows.put(charger, state)
             charger = None
             cs_session = None
             logger.info("[payment] StartGoPay waiting_otp flow=%s", flow_id[:8])
@@ -492,7 +473,7 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
                 flow_id=flow_id,
                 snap_token=str(state.get("snap_token") or ""),
                 issued_after_unix=int(state.get("issued_after_unix") or 0),
-                expires_at_unix=expires_at,
+                expires_at_unix=0,
             )
         except GoPayError as exc:
             logger.error("[payment] StartGoPay failed: %s", exc)
@@ -514,7 +495,7 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
 
         flow = self._flows.pop(request.flow_id)
         if flow is None:
-            return payment_pb2.GoPayResponse(success=False, error_message="payment flow not found or expired")
+            return payment_pb2.GoPayResponse(success=False, error_message="payment flow not found")
 
         try:
             logger.info("[payment] CompleteGoPay flow=%s", request.flow_id[:8])
@@ -546,10 +527,10 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
         return payment_pb2.CancelGoPayResponse(success=True)
 
 
-def serve(config_path: str, listen: str, flow_ttl_seconds: int, otp_webhook_listen: str):
+def serve(config_path: str, listen: str, otp_webhook_listen: str):
     cfg = _load_cfg(config_path)
     otp_store = OtpStore()
-    service = PaymentService(cfg, flow_ttl_seconds=flow_ttl_seconds)
+    service = PaymentService(cfg)
     webhook_server = OtpWebhookServer(otp_webhook_listen, otp_store)
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=4),
@@ -564,7 +545,7 @@ def serve(config_path: str, listen: str, flow_ttl_seconds: int, otp_webhook_list
     server.add_insecure_port(listen_addr)
     server.start()
     webhook_server.start()
-    logger.info("[payment] gRPC listening on %s flow_ttl=%ss", listen_addr, flow_ttl_seconds)
+    logger.info("[payment] gRPC listening on %s", listen_addr)
     try:
         server.wait_for_termination()
     except KeyboardInterrupt:
@@ -579,14 +560,13 @@ def main():
     parser = argparse.ArgumentParser(description="GoPay payment gRPC service")
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--listen", default=":50051")
-    parser.add_argument("--flow-ttl", type=int, default=60)
+    parser.add_argument("--flow-ttl", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--otp-webhook-listen", default=os.getenv("GOPAY_OTP_WEBHOOK_LISTEN", ":8081"))
     args = parser.parse_args()
 
     serve(
         config_path=args.config,
         listen=args.listen,
-        flow_ttl_seconds=args.flow_ttl,
         otp_webhook_listen=args.otp_webhook_listen,
     )
 

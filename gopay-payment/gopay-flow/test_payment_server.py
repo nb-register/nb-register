@@ -1,7 +1,38 @@
 import threading
 import unittest
 
-from payment_server import OtpStore
+from payment_server import FlowStore, OtpStore
+
+
+class FakeCharger:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class FlowStoreTests(unittest.TestCase):
+    def test_flow_store_keeps_flow_until_pop(self):
+        store = FlowStore()
+        charger = FakeCharger()
+
+        flow_id = store.put(charger, {"snap_token": "snap"})
+        flow = store.pop(flow_id)
+
+        self.assertIsNotNone(flow)
+        self.assertIs(flow.charger, charger)
+        self.assertEqual(flow.state["snap_token"], "snap")
+        self.assertIsNone(store.pop(flow_id))
+
+    def test_close_releases_unpopped_flows(self):
+        store = FlowStore()
+        charger = FakeCharger()
+
+        store.put(charger, {"snap_token": "snap"})
+        store.close()
+
+        self.assertTrue(charger.closed)
 
 
 class OtpStoreTests(unittest.TestCase):

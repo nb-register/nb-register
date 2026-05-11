@@ -6,18 +6,10 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.nbregister.whatsappforwarder.data.OtpExtractor
-import com.nbregister.whatsappforwarder.network.OtpWebhookClient
 import com.nbregister.whatsappforwarder.settings.SettingsStore
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import com.nbregister.whatsappforwarder.worker.OtpForwardWorker
 
 class WhatsAppNotificationListenerService : NotificationListenerService() {
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val client = OtpWebhookClient()
-
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val item = sbn ?: return
         val settings = SettingsStore(applicationContext)
@@ -35,26 +27,20 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
             return
         }
 
-        serviceScope.launch {
-            for (candidate in candidates) {
-                val otp = OtpExtractor.extractOtp(candidate.text) ?: continue
-                if (!OtpExtractor.hasKeyword(candidate.text, SettingsStore.OTP_KEYWORDS)) {
-                    continue
-                }
-
-                val result = client.send(appSettings.webhookUrl, otp)
-                if (result.success) {
-                    Log.i(TAG, "Forwarded WhatsApp OTP from $appName")
-                } else {
-                    Log.w(TAG, "Failed to forward WhatsApp OTP: ${result.message}")
-                }
+        for (candidate in candidates) {
+            val otp = OtpExtractor.extractOtp(candidate.text) ?: continue
+            if (!OtpExtractor.hasKeyword(candidate.text, SettingsStore.OTP_KEYWORDS)) {
+                continue
             }
+
+            OtpForwardWorker.enqueue(applicationContext, appSettings.webhookUrl, otp)
+            Log.i(TAG, "Queued WhatsApp OTP forward from $appName")
         }
     }
 
-    override fun onDestroy() {
-        serviceScope.cancel()
-        super.onDestroy()
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        NotificationListenerRebinder.request(applicationContext)
     }
 
     private fun resolveAppName(packageName: String): String {
