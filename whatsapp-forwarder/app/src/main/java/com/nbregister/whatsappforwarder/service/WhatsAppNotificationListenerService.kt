@@ -23,9 +23,8 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         val settings = SettingsStore(applicationContext)
         val appSettings = settings.readAll()
         if (
-            !appSettings.forwardingEnabled ||
             appSettings.webhookUrl.isBlank() ||
-            item.packageName !in appSettings.whatsappPackages
+            item.packageName !in SettingsStore.WATCHED_PACKAGES
         ) {
             return
         }
@@ -39,7 +38,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         serviceScope.launch {
             for (candidate in candidates) {
                 val otp = OtpExtractor.extractOtp(candidate.text) ?: continue
-                if (appSettings.requireKeyword && !OtpExtractor.hasKeyword(candidate.text, appSettings.keywords)) {
+                if (!OtpExtractor.hasKeyword(candidate.text, SettingsStore.OTP_KEYWORDS)) {
                     continue
                 }
 

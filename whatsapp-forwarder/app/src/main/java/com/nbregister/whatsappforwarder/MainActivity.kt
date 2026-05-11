@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,10 +62,6 @@ private fun WhatsAppForwarderScreen() {
     val scope = rememberCoroutineScope()
 
     var webhookUrl by remember { mutableStateOf(settingsStore.webhookUrl) }
-    var forwardingEnabled by remember { mutableStateOf(settingsStore.forwardingEnabled) }
-    var requireKeyword by remember { mutableStateOf(settingsStore.requireKeyword) }
-    var keywordsRaw by remember { mutableStateOf(settingsStore.keywordsRaw) }
-    var packagesRaw by remember { mutableStateOf(settingsStore.whatsappPackagesRaw) }
 
     Surface(
         color = MaterialTheme.colorScheme.background,
@@ -89,13 +84,6 @@ private fun WhatsAppForwarderScreen() {
             StatusSection(context)
 
             SectionCard {
-                ToggleRow(
-                    title = "Forwarding",
-                    description = "Listen for watched WhatsApp packages and send OTP messages.",
-                    checked = forwardingEnabled,
-                    onCheckedChange = { forwardingEnabled = it },
-                )
-                Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
                     value = webhookUrl,
                     onValueChange = { webhookUrl = it },
@@ -104,38 +92,11 @@ private fun WhatsAppForwarderScreen() {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(10.dp))
-                ToggleRow(
-                    title = "Require keyword",
-                    description = "Reduces false positives before sending a numeric code.",
-                    checked = requireKeyword,
-                    onCheckedChange = { requireKeyword = it },
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = keywordsRaw,
-                    onValueChange = { keywordsRaw = it },
-                    label = { Text("OTP keywords") },
-                    minLines = 3,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = packagesRaw,
-                    onValueChange = { packagesRaw = it },
-                    label = { Text("Watched packages") },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(
                         onClick = {
                             settingsStore.webhookUrl = webhookUrl
-                            settingsStore.forwardingEnabled = forwardingEnabled
-                            settingsStore.requireKeyword = requireKeyword
-                            settingsStore.keywordsRaw = keywordsRaw
-                            settingsStore.whatsappPackagesRaw = packagesRaw
                             toast(context, "Saved")
                         },
                     ) {
@@ -145,16 +106,8 @@ private fun WhatsAppForwarderScreen() {
                         onClick = {
                             scope.launch {
                                 settingsStore.webhookUrl = webhookUrl
-                                settingsStore.forwardingEnabled = forwardingEnabled
-                                settingsStore.requireKeyword = requireKeyword
-                                settingsStore.keywordsRaw = keywordsRaw
-                                settingsStore.whatsappPackagesRaw = packagesRaw
 
                                 val settings = settingsStore.readAll()
-                                if (!settings.forwardingEnabled) {
-                                    toast(context, "Forwarding disabled")
-                                    return@launch
-                                }
                                 if (settings.webhookUrl.isBlank()) {
                                     toast(context, "Webhook URL required")
                                     return@launch
@@ -223,26 +176,6 @@ private fun SectionCard(content: @Composable () -> Unit) {
         Column(Modifier.padding(16.dp)) {
             content()
         }
-    }
-}
-
-@Composable
-private fun ToggleRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
