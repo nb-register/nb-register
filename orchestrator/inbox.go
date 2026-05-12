@@ -131,8 +131,9 @@ func isOpenAIDeactivationNotice(message *pb.EmailInboxMessage) bool {
 	if message == nil {
 		return false
 	}
+	subject := strings.ToLower(strings.TrimSpace(message.GetSubject()))
 	return normalizeInboxEmail(message.GetFromAddress()) == openAIDeactivationSender &&
-		strings.EqualFold(strings.TrimSpace(message.GetSubject()), openAIDeactivationSubject)
+		strings.Contains(subject, strings.ToLower(openAIDeactivationSubject))
 }
 
 func deactivationRecipients(message *pb.EmailInboxMessage) []string {

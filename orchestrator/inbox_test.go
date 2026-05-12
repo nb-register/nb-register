@@ -10,7 +10,7 @@ import (
 func TestIsOpenAIDeactivationNotice(t *testing.T) {
 	msg := &pb.EmailInboxMessage{
 		FromAddress: "Trust and Safety <trustandsafety@tm.openai.com>",
-		Subject:     "Access Deactivated",
+		Subject:     "OpenAI - Access Deactivated  [C-CmgSPYQ3gSfU]",
 	}
 	if !isOpenAIDeactivationNotice(msg) {
 		t.Fatal("expected deactivation notice")
