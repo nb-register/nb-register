@@ -9,7 +9,10 @@ class StartupReceiver : BroadcastReceiver() {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED -> NotificationListenerRebinder.request(context)
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                NotificationListenerRebinder.request(context)
+                ForwarderForegroundService.start(context)
+            }
         }
     }
 }

@@ -10,8 +10,15 @@ import com.nbregister.whatsappforwarder.settings.SettingsStore
 import com.nbregister.whatsappforwarder.worker.OtpForwardWorker
 
 class WhatsAppNotificationListenerService : NotificationListenerService() {
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        ForwarderForegroundService.start(applicationContext)
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         val item = sbn ?: return
+        ForwarderForegroundService.start(applicationContext)
+
         val settings = SettingsStore(applicationContext)
         val appSettings = settings.readAll()
         if (
@@ -75,7 +82,7 @@ class WhatsAppNotificationListenerService : NotificationListenerService() {
         extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
             ?.forEach { line -> add(title, line) }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val messages = Notification.MessagingStyle.Message.getMessagesFromBundleArray(
                 extras.getParcelableArray(Notification.EXTRA_MESSAGES),
             )

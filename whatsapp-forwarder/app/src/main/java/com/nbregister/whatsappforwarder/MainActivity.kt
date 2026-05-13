@@ -1,9 +1,14 @@
 package com.nbregister.whatsappforwarder
 
+import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -36,7 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.nbregister.whatsappforwarder.network.OtpWebhookClient
+import com.nbregister.whatsappforwarder.service.ForwarderForegroundService
 import com.nbregister.whatsappforwarder.service.NotificationListenerRebinder
 import com.nbregister.whatsappforwarder.service.WhatsAppNotificationListenerService
 import com.nbregister.whatsappforwarder.settings.SettingsStore
@@ -48,6 +56,8 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestPostNotificationsIfNeeded()
+        ForwarderForegroundService.start(this)
         NotificationListenerRebinder.request(this)
         setContent {
             AppTheme {
@@ -159,9 +169,7 @@ private fun StatusSection(context: Context) {
         Spacer(Modifier.height(10.dp))
         OutlinedButton(
             onClick = {
-                runCatching {
-                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                }
+                openBatteryOptimizationSettings(context)
             },
         ) {
             Text("Battery settings")
@@ -195,6 +203,44 @@ private fun isNotificationAccessEnabled(context: Context): Boolean {
     }
 }
 
+private fun MainActivity.requestPostNotificationsIfNeeded() {
+    if (
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_POST_NOTIFICATIONS,
+        )
+    }
+}
+
+private fun openBatteryOptimizationSettings(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val powerManager = context.getSystemService(PowerManager::class.java)
+        if (powerManager?.isIgnoringBatteryOptimizations(context.packageName) == false) {
+            val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:${context.packageName}")
+            }
+            if (requestIntent.resolveActivity(context.packageManager) != null) {
+                runCatching {
+                    context.startActivity(requestIntent)
+                }.onSuccess {
+                    return
+                }
+            }
+        }
+    }
+
+    runCatching {
+        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+}
+
 private fun toast(context: Context, text: String) {
     Toast.makeText(context.applicationContext, text, Toast.LENGTH_SHORT).show()
 }
+
+private const val REQUEST_POST_NOTIFICATIONS = 1001

@@ -41,8 +41,11 @@ whatsapp-forwarder/app/build/outputs/apk/debug/app-debug.apk
 1. 安装 APK。
 2. 打开应用，填写 webhook URL，保存。
 3. 点击 `Open`，在系统通知访问设置里启用 `WhatsApp Forwarder`。
-4. 在系统电池设置里取消后台限制；部分 ROM 还需要允许自启动。
-5. 点击 `Test`，服务端 `gopay-payment` 日志应出现 OTP accepted。
+4. 允许通知权限；应用会显示一条低优先级常驻通知，用于提高后台存活率。
+5. 点击 `Battery settings`，允许忽略电池优化；部分 ROM 还需要允许自启动、后台运行并锁定后台。
+6. 点击 `Test`，服务端 `gopay-payment` 日志应出现 OTP accepted。
+
+说明：保活服务使用 `specialUse` 前台服务类型，避免 Android 15+ 对 `dataSync` 前台服务的 6 小时后台限额。开机广播会尝试重新绑定通知监听器并启动保活服务；如果厂商 ROM 拦截自启动，重启后手动打开一次应用即可恢复。
 
 ## 为什么不会只发第一条
 
