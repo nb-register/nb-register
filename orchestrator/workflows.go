@@ -307,32 +307,22 @@ func ProbeAccountWorkflow(ctx workflow.Context, input ProbeAccountWorkflowInput)
 		"plus_trial_already_known": account.PlusTrialKnown,
 	}
 	var plusTrial ProbePlusTrialActivityOutput
-	if !account.PlusTrialKnown {
-		if err := workflow.ExecuteActivity(plusTrialCtx, probePlusTrialActivityName, ProbePlusTrialActivityInput{
-			JobID:     input.JobID,
-			AccountID: account.AccountID,
-		}).Get(ctx, &plusTrial); err != nil {
-			combined["probe_plus_trial"] = plusTrial.Data
-			return failProbeAccountWorkflow(ctx, retryCtx, result, input.JobID, stepProbePlusTrial, statusFailedRetryable, false, true, err, combined), nil
-		}
-		result.PlusTrialChecked = plusTrial.Checked
-		result.PlusTrialEligible = plusTrial.PlusTrialEligible
-		result.PlusActive = plusTrial.PlusActive
-		result.Amount = plusTrial.Amount
-		result.Currency = plusTrial.Currency
-		result.Source = plusTrial.Source
-		result.PlanType = plusTrial.PlanType
-		result.CheckoutURL = plusTrial.CheckoutURL
+	if err := workflow.ExecuteActivity(plusTrialCtx, probePlusTrialActivityName, ProbePlusTrialActivityInput{
+		JobID:     input.JobID,
+		AccountID: account.AccountID,
+	}).Get(ctx, &plusTrial); err != nil {
 		combined["probe_plus_trial"] = plusTrial.Data
-	} else {
-		result.PlusTrialChecked = true
-		result.PlusTrialEligible = account.PlusTrialEligible
-		combined["probe_plus_trial"] = map[string]any{
-			"skipped":             true,
-			"reason":              "plus_trial_already_known",
-			"plus_trial_eligible": account.PlusTrialEligible,
-		}
+		return failProbeAccountWorkflow(ctx, retryCtx, result, input.JobID, stepProbePlusTrial, statusFailedRetryable, false, true, err, combined), nil
 	}
+	result.PlusTrialChecked = plusTrial.Checked
+	result.PlusTrialEligible = plusTrial.PlusTrialEligible
+	result.PlusActive = plusTrial.PlusActive
+	result.Amount = plusTrial.Amount
+	result.Currency = plusTrial.Currency
+	result.Source = plusTrial.Source
+	result.PlanType = plusTrial.PlanType
+	result.CheckoutURL = plusTrial.CheckoutURL
+	combined["probe_plus_trial"] = plusTrial.Data
 
 	var tier ProbeTierActivityOutput
 	if err := workflow.ExecuteActivity(tierCtx, probeTierActivityName, ProbeTierActivityInput{
@@ -349,7 +339,7 @@ func ProbeAccountWorkflow(ctx workflow.Context, input ProbeAccountWorkflowInput)
 		Result: combined,
 	}).Get(ctx, nil)
 
-	result.Success = tier.Success && (account.PlusTrialKnown || plusTrial.Success)
+	result.Success = tier.Success && plusTrial.Success
 	result.TierChecked = tier.Checked
 	result.Tier = tier.Tier
 	if tier.PlusActive {
