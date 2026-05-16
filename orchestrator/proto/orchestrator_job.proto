@@ -68,6 +68,15 @@ message GetJobResponse {
   string error_message = 2;
 }
 
+message GetWorkflowProgressRequest {
+  string job_id = 1;
+}
+
+message GetWorkflowProgressResponse {
+  WorkflowProgress progress = 1;
+  string error_message = 2;
+}
+
 message WorkflowProgress {
   string job_id = 1;
   string workflow = 2;

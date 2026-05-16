@@ -5,6 +5,7 @@
 !proto/gopay_app.proto
 !proto/email.proto
 !proto/orchestrator.proto
+!proto/orchestrator_*.proto
 !checkphone-tgbot/
 !checkphone-tgbot/bot.py
 !checkphone-tgbot/checkphone.py

@@ -68,6 +68,20 @@ type stepRow struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+type workflowProgressRow struct {
+	JobID         string `json:"job_id"`
+	Workflow      string `json:"workflow"`
+	StepName      string `json:"step_name"`
+	Status        string `json:"status"`
+	ErrorMessage  string `json:"error_message"`
+	UpdatedAtUnix int64  `json:"updated_at_unix"`
+}
+
+type jobEventRow struct {
+	Job      *jobRow              `json:"job"`
+	Progress *workflowProgressRow `json:"progress,omitempty"`
+}
+
 type createAccountRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -824,6 +838,20 @@ func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
 			}
 			s.submitJobOTP(w, r, jobID)
 			return
+		case "progress":
+			if r.Method != http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			s.getJobProgress(w, r, jobID)
+			return
+		case "events":
+			if r.Method != http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			s.streamJobEvents(w, r, jobID)
+			return
 		default:
 			writeError(w, http.StatusNotFound, fmt.Errorf("unsupported job action: %s", parts[1]))
 			return
@@ -840,6 +868,97 @@ func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *server) streamJobEvents(w http.ResponseWriter, r *http.Request, jobID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, errors.New("streaming is not supported"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	send := func() bool {
+		event, err := s.jobEvent(r.Context(), jobID)
+		if err != nil {
+			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", sseJSON(map[string]string{"error": err.Error()}))
+			flusher.Flush()
+			return false
+		}
+		_, _ = fmt.Fprintf(w, "event: job\ndata: %s\n\n", sseJSON(event))
+		flusher.Flush()
+		return event.Job != nil && event.Job.Status == "RUNNING"
+	}
+
+	if !send() {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
+}
+
+func (s *server) jobEvent(ctx context.Context, jobID string) (jobEventRow, error) {
+	job, err := s.getJob(ctx, jobID)
+	if err != nil {
+		return jobEventRow{}, err
+	}
+	progress, err := s.jobProgress(ctx, jobID)
+	if err != nil {
+		return jobEventRow{}, err
+	}
+	return jobEventRow{Job: job, Progress: progress}, nil
+}
+
+func (s *server) getJobProgress(w http.ResponseWriter, r *http.Request, jobID string) {
+	progress, err := s.jobProgress(r.Context(), jobID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, progress)
+}
+
+func (s *server) jobProgress(ctx context.Context, jobID string) (*workflowProgressRow, error) {
+	resp, err := s.orchestratorClient.GetWorkflowProgress(ctx, &pb.GetWorkflowProgressRequest{JobId: jobID})
+	if err != nil {
+		return nil, err
+	}
+	if resp.GetErrorMessage() != "" {
+		return nil, errors.New(resp.GetErrorMessage())
+	}
+	progress := resp.GetProgress()
+	if progress == nil {
+		return &workflowProgressRow{JobID: jobID}, nil
+	}
+	return &workflowProgressRow{
+		JobID:         progress.GetJobId(),
+		Workflow:      progress.GetWorkflow(),
+		StepName:      progress.GetStepName(),
+		Status:        progress.GetStatus(),
+		ErrorMessage:  progress.GetErrorMessage(),
+		UpdatedAtUnix: progress.GetUpdatedAtUnix(),
+	}, nil
+}
+
+func sseJSON(value any) string {
+	b, err := json.Marshal(value)
+	if err != nil {
+		b, _ = json.Marshal(map[string]string{"error": err.Error()})
+	}
+	return string(b)
 }
 
 func (s *server) submitJobOTP(w http.ResponseWriter, r *http.Request, jobID string) {

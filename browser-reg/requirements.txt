@@ -2,4 +2,5 @@ camoufox[geoip]
 faker
 grpcio
 grpcio-tools
+protobuf>=6.31.1
 maxminddb

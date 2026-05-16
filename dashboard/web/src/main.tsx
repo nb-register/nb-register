@@ -83,6 +83,20 @@ type Job = {
   steps?: Step[];
 };
 
+type WorkflowProgress = {
+  job_id: string;
+  workflow: string;
+  step_name: string;
+  status: string;
+  error_message: string;
+  updated_at_unix: number;
+};
+
+type JobEvent = {
+  job?: Job;
+  progress?: WorkflowProgress;
+};
+
 type Mailbox = {
   email_address: string;
   password: string;
@@ -281,6 +295,7 @@ function App() {
   const [runningAccountIds, setRunningAccountIds] = useState<Set<string>>(new Set());
   const [refreshingAccessTokenIds, setRefreshingAccessTokenIds] = useState<Set<string>>(new Set());
   const [runningJobCount, setRunningJobCount] = useState(0);
+  const [selectedJobProgress, setSelectedJobProgress] = useState<WorkflowProgress | null>(null);
   const [loadError, setLoadError] = useState('');
 
   async function refresh() {
@@ -300,7 +315,7 @@ function App() {
       setRunningJobCount(runningJobs.length);
       setRunningAccountIds(new Set(runningJobs.filter((job) => job.account_id).map((job) => job.account_id)));
       if (selectedJob) {
-        setSelectedJob(await api<Job>(`/api/jobs/${selectedJob.job_id}`));
+        await refreshSelectedJob(selectedJob.job_id);
       }
       if (selectedMailbox) {
         const freshMailbox = nextMailboxes.find((mailbox) => mailbox.email_address === selectedMailbox.email_address);
@@ -314,6 +329,15 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function refreshSelectedJob(jobID: string) {
+    const [job, progress] = await Promise.all([
+      api<Job>(`/api/jobs/${jobID}`),
+      api<WorkflowProgress>(`/api/jobs/${jobID}/progress`)
+    ]);
+    setSelectedJob(job);
+    setSelectedJobProgress(progress && progress.job_id ? progress : null);
   }
 
   async function runAccountWorkflow(label: string, path: string, account: Account) {
@@ -545,6 +569,38 @@ function App() {
   }, [accountStatus, jobStatus, mailboxStatus]);
 
   useEffect(() => {
+    if (!selectedJob?.job_id) {
+      setSelectedJobProgress(null);
+      return;
+    }
+    const jobID = selectedJob.job_id;
+    const source = new EventSource(`/api/jobs/${jobID}/events`);
+    source.addEventListener('job', (event) => {
+      const payload = JSON.parse((event as MessageEvent).data) as JobEvent;
+      if (payload.job) setSelectedJob(payload.job);
+      setSelectedJobProgress(payload.progress && payload.progress.job_id ? payload.progress : null);
+      if (payload.job && payload.job.status !== 'RUNNING') {
+        source.close();
+      }
+    });
+    source.addEventListener('error', (event) => {
+      const data = (event as MessageEvent).data;
+      if (data) {
+        try {
+          const payload = JSON.parse(data) as { error?: string };
+          if (payload.error) setToast({ kind: 'error', text: payload.error });
+        } catch {
+          setToast({ kind: 'error', text: '工作流事件流解析失败' });
+        }
+      }
+      source.close();
+    });
+    return () => {
+      source.close();
+    };
+  }, [selectedJob?.job_id]);
+
+  useEffect(() => {
     if (!toast) return;
     const id = window.setTimeout(() => setToast(null), toast.kind === 'error' ? 6000 : 3500);
     return () => window.clearTimeout(id);
@@ -560,7 +616,7 @@ function App() {
     try {
       setSelectedAccount(null);
       setSelectedMailbox(null);
-      setSelectedJob(await api<Job>(`/api/jobs/${job.job_id}`));
+      await refreshSelectedJob(job.job_id);
     } catch (err) {
       setToast({ kind: 'error', text: errorText(err) });
     }
@@ -829,6 +885,7 @@ function App() {
         {selectedJob && (
           <JobDetails
             job={selectedJob}
+            progress={selectedJobProgress}
             onCopy={copyField}
             onOtpSubmit={submitJobOtp}
           />
@@ -1007,8 +1064,9 @@ function AccountDetails({ account, showSecrets, busy, inboxLoading, refreshingAc
   );
 }
 
-function JobDetails({ job, onCopy, onOtpSubmit }: {
+function JobDetails({ job, progress, onCopy, onOtpSubmit }: {
   job: Job;
+  progress: WorkflowProgress | null;
   onCopy: (label: string, value: string) => void;
   onOtpSubmit: (job: Job, otp: string) => Promise<void>;
 }) {
@@ -1023,6 +1081,12 @@ function JobDetails({ job, onCopy, onOtpSubmit }: {
         <KV label="动作" value={actionText(job.action)} copyValue={job.action} onCopy={onCopy} />
         <KV label="状态" value={statusText(job.status)} copyValue={job.status} onCopy={onCopy} />
         <KV label="当前步骤" value={stepText(job.last_step)} copyValue={job.last_step || '-'} onCopy={onCopy} />
+        {progress && (
+          <>
+            <KV label="执行状态" value={`${statusText(progress.status.toUpperCase())} · ${stepText(progress.step_name)}`} copyValue={progress.step_name || '-'} onCopy={onCopy} />
+            <KV label="执行刷新" value={formatUnix(progress.updated_at_unix)} onCopy={onCopy} />
+          </>
+        )}
         <KV label="更新时间" value={formatJobTime(job.updated_at)} onCopy={onCopy} />
         <KV label="错误" value={job.error_message || '-'} onCopy={onCopy} />
         {canSubmitOtp(job) && <OtpSubmitter job={job} onSubmit={onOtpSubmit} />}
