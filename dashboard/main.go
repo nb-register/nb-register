@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -33,53 +32,9 @@ type server struct {
 	orchestratorClient pb.OrchestratorServiceClient
 	paymentClient      pb.PaymentServiceClient
 	emailClient        pb.EmailServiceClient
-	db                 *sql.DB
 	staticDir          string
 	mailboxRegisterMu  sync.Mutex
 	mailboxRegistering bool
-}
-
-type jobRow struct {
-	JobID        string    `json:"job_id"`
-	AccountID    string    `json:"account_id"`
-	Action       string    `json:"action"`
-	Status       string    `json:"status"`
-	Recoverable  bool      `json:"recoverable"`
-	Retryable    bool      `json:"retryable"`
-	LastStep     string    `json:"last_step"`
-	ErrorMessage string    `json:"error_message"`
-	ResultJSON   string    `json:"result_json"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Steps        []stepRow `json:"steps,omitempty"`
-}
-
-type stepRow struct {
-	JobID        string    `json:"job_id,omitempty"`
-	StepName     string    `json:"step_name"`
-	Status       string    `json:"status"`
-	Recoverable  bool      `json:"recoverable"`
-	Retryable    bool      `json:"retryable"`
-	ErrorMessage string    `json:"error_message"`
-	ResultJSON   string    `json:"result_json"`
-	StartedAt    int64     `json:"started_at"`
-	CompletedAt  int64     `json:"completed_at"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-type workflowProgressRow struct {
-	JobID         string `json:"job_id"`
-	Workflow      string `json:"workflow"`
-	StepName      string `json:"step_name"`
-	Status        string `json:"status"`
-	ErrorMessage  string `json:"error_message"`
-	UpdatedAtUnix int64  `json:"updated_at_unix"`
-}
-
-type jobEventRow struct {
-	Job      *jobRow              `json:"job"`
-	Progress *workflowProgressRow `json:"progress,omitempty"`
 }
 
 type createAccountRequest struct {
@@ -126,8 +81,6 @@ const (
 )
 
 func main() {
-	ctx := context.Background()
-
 	accountConn, err := newGRPCClient(envDefault("ACCOUNT_DB_ADDR", "account-db:50051"))
 	if err != nil {
 		log.Fatalf("connect account-db: %v", err)
@@ -152,21 +105,11 @@ func main() {
 	}
 	defer emailConn.Close()
 
-	pg, err := sql.Open("pgx", envDefault("ORCHESTRATOR_PG_DSN", envDefault("PG_DSN", "")))
-	if err != nil {
-		log.Fatalf("open postgres: %v", err)
-	}
-	if err := pg.PingContext(ctx); err != nil {
-		log.Fatalf("ping postgres: %v", err)
-	}
-	defer pg.Close()
-
 	s := &server{
 		accountClient:      pb.NewAccountDatabaseServiceClient(accountConn),
 		orchestratorClient: pb.NewOrchestratorServiceClient(orchestratorConn),
 		paymentClient:      pb.NewPaymentServiceClient(paymentConn),
 		emailClient:        pb.NewEmailServiceClient(emailConn),
-		db:                 pg,
 		staticDir:          envDefault("STATIC_DIR", "web/dist"),
 	}
 
@@ -812,12 +755,22 @@ func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	jobs, err := s.listJobs(r.Context(), r)
+
+	resp, err := s.orchestratorClient.ListJobs(r.Context(), &pb.ListJobsRequest{
+		Limit:     int32(queryInt(r, "limit", 100)),
+		Status:    strings.TrimSpace(r.URL.Query().Get("status")),
+		Action:    strings.TrimSpace(r.URL.Query().Get("action")),
+		AccountId: strings.TrimSpace(r.URL.Query().Get("account_id")),
+	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	if resp.GetErrorMessage() != "" {
+		writeError(w, http.StatusBadGateway, errors.New(resp.GetErrorMessage()))
+		return
+	}
+	writeJSON(w, http.StatusOK, resp.GetSnapshots())
 }
 
 func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
@@ -838,13 +791,6 @@ func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
 			}
 			s.submitJobOTP(w, r, jobID)
 			return
-		case "progress":
-			if r.Method != http.MethodGet {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			s.getJobProgress(w, r, jobID)
-			return
 		case "events":
 			if r.Method != http.MethodGet {
 				w.WriteHeader(http.StatusMethodNotAllowed)
@@ -862,12 +808,16 @@ func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	job, err := s.getJob(r.Context(), jobID)
+	resp, err := s.orchestratorClient.GetJob(r.Context(), &pb.GetJobRequest{JobId: jobID})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, job)
+	if resp.GetErrorMessage() != "" {
+		writeError(w, http.StatusBadGateway, errors.New(resp.GetErrorMessage()))
+		return
+	}
+	writeJSON(w, http.StatusOK, resp.GetSnapshot())
 }
 
 func (s *server) streamJobEvents(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -881,76 +831,37 @@ func (s *server) streamJobEvents(w http.ResponseWriter, r *http.Request, jobID s
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	send := func() bool {
-		event, err := s.jobEvent(r.Context(), jobID)
-		if err != nil {
-			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", sseJSON(map[string]string{"error": err.Error()}))
-			flusher.Flush()
-			return false
-		}
-		_, _ = fmt.Fprintf(w, "event: job\ndata: %s\n\n", sseJSON(event))
+	stream, err := s.orchestratorClient.WatchJob(r.Context(), &pb.WatchJobRequest{
+		JobId:        jobID,
+		AfterEventId: requestLastEventID(r),
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", sseJSON(map[string]string{"error": err.Error()}))
 		flusher.Flush()
-		return event.Job != nil && event.Job.Status == "RUNNING"
-	}
-
-	if !send() {
 		return
 	}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+
 	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-			if !send() {
-				return
+		event, err := stream.Recv()
+		if err != nil {
+			if !errors.Is(err, io.EOF) && status.Code(err) != codes.Canceled {
+				_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", sseJSON(map[string]string{"error": err.Error()}))
+				flusher.Flush()
 			}
+			return
 		}
+		if event.GetErrorMessage() != "" {
+			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", sseJSON(map[string]string{"error": event.GetErrorMessage()}))
+			flusher.Flush()
+			return
+		}
+		snapshot := event.GetSnapshot()
+		if snapshot == nil {
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "id: %d\nevent: job\ndata: %s\n\n", snapshot.GetEventId(), sseJSON(snapshot))
+		flusher.Flush()
 	}
-}
-
-func (s *server) jobEvent(ctx context.Context, jobID string) (jobEventRow, error) {
-	job, err := s.getJob(ctx, jobID)
-	if err != nil {
-		return jobEventRow{}, err
-	}
-	progress, err := s.jobProgress(ctx, jobID)
-	if err != nil {
-		return jobEventRow{}, err
-	}
-	return jobEventRow{Job: job, Progress: progress}, nil
-}
-
-func (s *server) getJobProgress(w http.ResponseWriter, r *http.Request, jobID string) {
-	progress, err := s.jobProgress(r.Context(), jobID)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, progress)
-}
-
-func (s *server) jobProgress(ctx context.Context, jobID string) (*workflowProgressRow, error) {
-	resp, err := s.orchestratorClient.GetWorkflowProgress(ctx, &pb.GetWorkflowProgressRequest{JobId: jobID})
-	if err != nil {
-		return nil, err
-	}
-	if resp.GetErrorMessage() != "" {
-		return nil, errors.New(resp.GetErrorMessage())
-	}
-	progress := resp.GetProgress()
-	if progress == nil {
-		return &workflowProgressRow{JobID: jobID}, nil
-	}
-	return &workflowProgressRow{
-		JobID:         progress.GetJobId(),
-		Workflow:      progress.GetWorkflow(),
-		StepName:      progress.GetStepName(),
-		Status:        progress.GetStatus(),
-		ErrorMessage:  progress.GetErrorMessage(),
-		UpdatedAtUnix: progress.GetUpdatedAtUnix(),
-	}, nil
 }
 
 func sseJSON(value any) string {
@@ -959,6 +870,18 @@ func sseJSON(value any) string {
 		b, _ = json.Marshal(map[string]string{"error": err.Error()})
 	}
 	return string(b)
+}
+
+func requestLastEventID(r *http.Request) int64 {
+	value := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if value == "" {
+		return 0
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (s *server) submitJobOTP(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -1119,69 +1042,6 @@ func (s *server) handleRegisterAndActivate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
-}
-
-func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error) {
-	limit := queryInt(r, "limit", 100)
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-
-	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
-	args := []any{}
-	if value := strings.TrimSpace(r.URL.Query().Get("status")); value != "" {
-		args = append(args, value)
-		query += fmt.Sprintf(" AND status = $%d", len(args))
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get("action")); value != "" {
-		args = append(args, value)
-		query += fmt.Sprintf(" AND action = $%d", len(args))
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get("account_id")); value != "" {
-		args = append(args, value)
-		query += fmt.Sprintf(" AND account_id = $%d", len(args))
-	}
-	args = append(args, limit)
-	query += fmt.Sprintf(" ORDER BY updated_at DESC LIMIT $%d", len(args))
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	jobs := []jobRow{}
-	for rows.Next() {
-		var job jobRow
-		if err := rows.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.CreatedAt, &job.UpdatedAt); err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, job)
-	}
-	return jobs, rows.Err()
-}
-
-func (s *server) getJob(ctx context.Context, jobID string) (*jobRow, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE id = $1`, jobID)
-	var job jobRow
-	if err := row.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.CreatedAt, &job.UpdatedAt); err != nil {
-		return nil, err
-	}
-
-	rows, err := s.db.QueryContext(ctx, `SELECT job_id, step_name, status, recoverable, retryable, error_message, result_json, started_at, completed_at, to_timestamp(created_at), to_timestamp(updated_at) FROM job_steps WHERE job_id = $1 ORDER BY started_at ASC, step_name ASC`, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var step stepRow
-		if err := rows.Scan(&step.JobID, &step.StepName, &step.Status, &step.Recoverable, &step.Retryable, &step.ErrorMessage, &step.ResultJSON, &step.StartedAt, &step.CompletedAt, &step.CreatedAt, &step.UpdatedAt); err != nil {
-			return nil, err
-		}
-		job.Steps = append(job.Steps, step)
-	}
-	return &job, rows.Err()
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {

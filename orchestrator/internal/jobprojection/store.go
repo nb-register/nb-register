@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"orchestrator/db"
+	"orchestrator/internal/contracts"
 	"orchestrator/internal/jobstatus"
 	"orchestrator/pb"
 )
@@ -28,6 +29,13 @@ type StepFailure struct {
 	Retryable    bool
 	ErrorMessage string
 	Result       any
+}
+
+type ListFilter struct {
+	Limit     int
+	Status    string
+	Action    string
+	AccountID string
 }
 
 func NewStore(db *gorm.DB) *Store {
@@ -111,12 +119,83 @@ func (s *Store) Get(ctx context.Context, jobID string) (*db.Job, error) {
 	return &job, nil
 }
 
+func (s *Store) List(ctx context.Context, filter ListFilter) ([]db.Job, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	query := s.db.WithContext(ctx).Model(&db.Job{})
+	if value := strings.TrimSpace(filter.Status); value != "" {
+		query = query.Where("status = ?", value)
+	}
+	if value := strings.TrimSpace(filter.Action); value != "" {
+		query = query.Where("action = ?", value)
+	}
+	if value := strings.TrimSpace(filter.AccountID); value != "" {
+		query = query.Where("account_id = ?", value)
+	}
+
+	var jobs []db.Job
+	if err := query.Order("updated_at DESC").Limit(limit).Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	return jobs, nil
+}
+
 func (s *Store) Steps(ctx context.Context, jobID string) ([]db.JobStep, error) {
 	var steps []db.JobStep
 	if err := s.db.WithContext(ctx).Where("job_id = ?", jobID).Order("started_at ASC, step_name ASC").Find(&steps).Error; err != nil {
 		return nil, err
 	}
 	return steps, nil
+}
+
+func (s *Store) GetSnapshot(ctx context.Context, jobID string) (*pb.JobSnapshot, error) {
+	job, err := s.Get(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	steps, err := s.Steps(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	return BuildSnapshot(job, steps), nil
+}
+
+func (s *Store) ListSnapshots(ctx context.Context, filter ListFilter) ([]*pb.JobSnapshot, error) {
+	jobs, err := s.List(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return []*pb.JobSnapshot{}, nil
+	}
+
+	jobIDs := make([]string, 0, len(jobs))
+	for i := range jobs {
+		jobIDs = append(jobIDs, jobs[i].ID)
+	}
+
+	var steps []db.JobStep
+	if err := s.db.WithContext(ctx).
+		Where("job_id IN ?", jobIDs).
+		Order("started_at ASC, step_name ASC").
+		Find(&steps).Error; err != nil {
+		return nil, err
+	}
+
+	stepsByJob := make(map[string][]db.JobStep, len(jobs))
+	for i := range steps {
+		stepsByJob[steps[i].JobID] = append(stepsByJob[steps[i].JobID], steps[i])
+	}
+
+	snapshots := make([]*pb.JobSnapshot, 0, len(jobs))
+	for i := range jobs {
+		job := jobs[i]
+		snapshots = append(snapshots, BuildSnapshot(&job, stepsByJob[job.ID]))
+	}
+	return snapshots, nil
 }
 
 func (s *Store) RunAtomicStep(ctx context.Context, jobID, stepName string, recoverable bool, retryable bool, fn func() (any, error)) (any, error) {
@@ -286,6 +365,67 @@ func MarshalStepResult(jobID, stepName string, result any) string {
 		return ""
 	}
 	return string(b)
+}
+
+func BuildSnapshot(job *db.Job, steps []db.JobStep) *pb.JobSnapshot {
+	if job == nil {
+		return nil
+	}
+	progress := ProgressFromJob(job)
+	return &pb.JobSnapshot{
+		Job:      ToProto(job, steps),
+		Progress: progress,
+		EventId:  eventID(job, steps, progress),
+	}
+}
+
+func ApplyProgress(snapshot *pb.JobSnapshot, progress *pb.WorkflowProgress) {
+	if snapshot == nil || progress == nil {
+		return
+	}
+	snapshot.Progress = progress
+	if progress.GetUpdatedAtUnix() > snapshot.GetEventId() {
+		snapshot.EventId = progress.GetUpdatedAtUnix()
+	}
+}
+
+func ProgressFromJob(job *db.Job) *pb.WorkflowProgress {
+	if job == nil {
+		return nil
+	}
+	workflowID, _ := contracts.WorkflowID(job.Action, job.ID)
+	stepName := strings.TrimSpace(job.LastStep)
+	if stepName == "" {
+		stepName = "created"
+	}
+	status := strings.ToLower(strings.TrimSpace(job.Status))
+	if status == "" {
+		status = "unknown"
+	}
+	return &pb.WorkflowProgress{
+		JobId:         job.ID,
+		Workflow:      workflowID,
+		StepName:      stepName,
+		Status:        status,
+		ErrorMessage:  job.ErrorMessage,
+		UpdatedAtUnix: job.UpdatedAt,
+	}
+}
+
+func eventID(job *db.Job, steps []db.JobStep, progress *pb.WorkflowProgress) int64 {
+	var id int64
+	if job != nil {
+		id = job.UpdatedAt
+	}
+	for i := range steps {
+		if steps[i].UpdatedAt > id {
+			id = steps[i].UpdatedAt
+		}
+	}
+	if progress != nil && progress.GetUpdatedAtUnix() > id {
+		id = progress.GetUpdatedAtUnix()
+	}
+	return id
 }
 
 func upsertParams(ctx context.Context, tx *gorm.DB, jobID string, params map[string]string) error {

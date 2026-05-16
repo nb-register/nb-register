@@ -487,7 +487,6 @@ workloads:
     image:
       repository: nb-register/dashboard
       tag: latest
-    postgresEnv: true
     env:
       LISTEN_ADDR: ":8080"
       ACCOUNT_DB_ADDR: '{{ include "nb-register.componentFullname" (dict "root" . "component" "account-db") }}:50051'
@@ -495,7 +494,6 @@ workloads:
       PAYMENT_ADDR: '{{ include "nb-register.componentFullname" (dict "root" . "component" "gopay-payment") }}:50051'
       EMAIL_ADDR: '{{ include "nb-register.componentFullname" (dict "root" . "component" "outlook-imap-service") }}:50051'
       MAILBOX_REGISTER_ADDR: '{{ include "nb-register.componentFullname" (dict "root" . "component" "outlook-register-service") }}:50051'
-      ORCHESTRATOR_PG_DSN: '{{ include "nb-register.pgDsn" . }}'
     ports:
       - name: http
         containerPort: 8080

@@ -287,7 +287,6 @@ services:
       - PAYMENT_ADDR=gopay-payment:50051
       - EMAIL_ADDR=outlook-imap-service:50051
       - MAILBOX_REGISTER_ADDR=outlook-register-service:50051
-      - ORCHESTRATOR_PG_DSN=host=postgres user=${POSTGRES_USER:-nb_register} password=${POSTGRES_PASSWORD:-nb_register} dbname=${POSTGRES_DB:-nb_register} port=5432 sslmode=disable
       - MAILBOX_REGISTER_TIMEOUT_SECONDS=${MAILBOX_REGISTER_TIMEOUT_SECONDS:-1800}
     depends_on:
       - account-db
@@ -295,7 +294,6 @@ services:
       - gopay-payment
       - outlook-imap-service
       - outlook-register-service
-      - postgres
     restart: always
 
   browser-reg:

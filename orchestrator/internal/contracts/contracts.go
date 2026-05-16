@@ -14,6 +14,43 @@ const (
 	ActionMailboxOAuth        = "MAILBOX_OAUTH"
 )
 
+const (
+	TaskQueueDefault = "nb-register-orchestrator"
+
+	CreateJobActivityName                       = "CreateJobActivity"
+	EnsureAccountActivityName                   = "EnsureAccountActivity"
+	ResolveAccountActivityName                  = "ResolveAccountFromJobActivity"
+	BrowserAuthStartActivityName                = "BrowserAuthStartActivity"
+	BrowserAuthCompleteActivityName             = "BrowserAuthCompleteActivity"
+	BrowserAuthCancelActivityName               = "BrowserAuthCancelActivity"
+	WaitOTPActivityName                         = "OTPWaitActivity"
+	FetchManualOTPActivityName                  = "FetchManualOTPActivity"
+	EnsureLogonActivityName                     = "EnsureLogonActivity"
+	GoPayPaymentStartActivityName               = "GoPayPaymentStartActivity"
+	GoPayPaymentCompleteActivityName            = "GoPayPaymentCompleteActivity"
+	GoPayPaymentCancelActivityName              = "GoPayPaymentCancelActivity"
+	GoPayAppOTPStartActivityName                = "GoPayAppOTPStartActivity"
+	GoPayAppOTPCompleteActivityName             = "GoPayAppOTPCompleteActivity"
+	GoPayAppChangePhoneStartActivityName        = "GoPayAppChangePhoneStartActivity"
+	GoPayAppChangePhoneRetryActivityName        = "GoPayAppChangePhoneRetryActivity"
+	GoPayAppSMSCancelBeforeRotationActivityName = "GoPayAppSMSCancelBeforeRotationActivity"
+	GoPayAppSMSFinishActivityName               = "GoPayAppSMSFinishActivity"
+	GoPayAppChangePhoneCompleteActivityName     = "GoPayAppChangePhoneCompleteActivity"
+	GoPayAppDeactivateStartActivityName         = "GoPayAppDeactivateStartActivity"
+	GoPayAppDeactivateCompleteActivityName      = "GoPayAppDeactivateCompleteActivity"
+	ProbePlusTrialActivityName                  = "ProbePlusTrialAtomicActivity"
+	ProbeTierActivityName                       = "ProbeTierAtomicActivity"
+	RegisterMailboxActivityName                 = "RegisterMailboxAtomicActivity"
+	MailboxOAuthActivityName                    = "MailboxOAuthAtomicActivity"
+	PersistRegisteredActivityName               = "PersistRegisteredActivity"
+	PersistActivatedActivityName                = "PersistActivatedActivity"
+	MarkJobFailedActivityName                   = "MarkJobFailedActivity"
+	MarkJobSucceededActivityName                = "MarkJobSucceededActivity"
+
+	ManualOTPSignalName       = "manual_otp_available"
+	WorkflowProgressQueryName = "progress"
+)
+
 func WorkflowID(action string, jobID string) (string, bool) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {

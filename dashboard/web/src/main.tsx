@@ -78,8 +78,8 @@ type Job = {
   last_step: string;
   error_message: string;
   result_json: string;
-  created_at: string;
-  updated_at: string;
+  created_at: number;
+  updated_at: number;
   steps?: Step[];
 };
 
@@ -92,9 +92,10 @@ type WorkflowProgress = {
   updated_at_unix: number;
 };
 
-type JobEvent = {
+type JobSnapshot = {
   job?: Job;
   progress?: WorkflowProgress;
+  event_id: number;
 };
 
 type Mailbox = {
@@ -276,11 +277,11 @@ const stepLabels: DisplayLabelMap = {
 
 function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobSnapshots, setJobSnapshots] = useState<JobSnapshot[]>([]);
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [activeView, setActiveView] = useState<ViewKey>('accounts');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [selectedJobSnapshot, setSelectedJobSnapshot] = useState<JobSnapshot | null>(null);
   const [selectedMailbox, setSelectedMailbox] = useState<Mailbox | null>(null);
   const [accountStatus, setAccountStatus] = useState('');
   const [jobStatus, setJobStatus] = useState('');
@@ -295,25 +296,27 @@ function App() {
   const [runningAccountIds, setRunningAccountIds] = useState<Set<string>>(new Set());
   const [refreshingAccessTokenIds, setRefreshingAccessTokenIds] = useState<Set<string>>(new Set());
   const [runningJobCount, setRunningJobCount] = useState(0);
-  const [selectedJobProgress, setSelectedJobProgress] = useState<WorkflowProgress | null>(null);
   const [loadError, setLoadError] = useState('');
+  const jobs = jobSnapshots.map((snapshot) => snapshot.job).filter((job): job is Job => !!job);
+  const selectedJob = selectedJobSnapshot?.job || null;
+  const selectedJobProgress = selectedJobSnapshot?.progress || null;
 
   async function refresh() {
     setBusy(true);
     try {
       const [accountsData, jobsData, mailboxesData, runningJobsData] = await Promise.all([
         api<Account[]>(`/api/accounts?limit=200${accountStatus ? `&status=${accountStatus}` : ''}`),
-        api<Job[]>(`/api/jobs?limit=200${jobStatus ? `&status=${jobStatus}` : ''}`),
+        api<JobSnapshot[]>(`/api/jobs?limit=200${jobStatus ? `&status=${jobStatus}` : ''}`),
         api<Mailbox[]>('/api/mailboxes?limit=500'),
-        api<Job[]>('/api/jobs?limit=200&status=RUNNING')
+        api<JobSnapshot[]>('/api/jobs?limit=200&status=RUNNING')
       ]);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
-      setJobs(Array.isArray(jobsData) ? jobsData : []);
+      setJobSnapshots(Array.isArray(jobsData) ? jobsData : []);
       const nextMailboxes = Array.isArray(mailboxesData) ? mailboxesData : [];
       setMailboxes(nextMailboxes);
       const runningJobs = Array.isArray(runningJobsData) ? runningJobsData : [];
       setRunningJobCount(runningJobs.length);
-      setRunningAccountIds(new Set(runningJobs.filter((job) => job.account_id).map((job) => job.account_id)));
+      setRunningAccountIds(new Set(runningJobs.map((snapshot) => snapshot.job).filter((job): job is Job => !!job?.account_id).map((job) => job.account_id)));
       if (selectedJob) {
         await refreshSelectedJob(selectedJob.job_id);
       }
@@ -332,12 +335,8 @@ function App() {
   }
 
   async function refreshSelectedJob(jobID: string) {
-    const [job, progress] = await Promise.all([
-      api<Job>(`/api/jobs/${jobID}`),
-      api<WorkflowProgress>(`/api/jobs/${jobID}/progress`)
-    ]);
-    setSelectedJob(job);
-    setSelectedJobProgress(progress && progress.job_id ? progress : null);
+    const snapshot = await api<JobSnapshot>(`/api/jobs/${jobID}`);
+    setSelectedJobSnapshot(snapshot && snapshot.job ? snapshot : null);
   }
 
   async function runAccountWorkflow(label: string, path: string, account: Account) {
@@ -570,16 +569,15 @@ function App() {
 
   useEffect(() => {
     if (!selectedJob?.job_id) {
-      setSelectedJobProgress(null);
+      setSelectedJobSnapshot(null);
       return;
     }
     const jobID = selectedJob.job_id;
     const source = new EventSource(`/api/jobs/${jobID}/events`);
     source.addEventListener('job', (event) => {
-      const payload = JSON.parse((event as MessageEvent).data) as JobEvent;
-      if (payload.job) setSelectedJob(payload.job);
-      setSelectedJobProgress(payload.progress && payload.progress.job_id ? payload.progress : null);
-      if (payload.job && payload.job.status !== 'RUNNING') {
+      const snapshot = JSON.parse((event as MessageEvent).data) as JobSnapshot;
+      if (snapshot.job) setSelectedJobSnapshot(snapshot);
+      if (snapshot.job && snapshot.job.status !== 'RUNNING') {
         source.close();
       }
     });
@@ -592,8 +590,8 @@ function App() {
         } catch {
           setToast({ kind: 'error', text: '工作流事件流解析失败' });
         }
+        source.close();
       }
-      source.close();
     });
     return () => {
       source.close();
@@ -608,7 +606,7 @@ function App() {
 
   function selectAccount(account: Account) {
     setSelectedAccount(account);
-    setSelectedJob(null);
+    setSelectedJobSnapshot(null);
     setSelectedMailbox(null);
   }
 
@@ -624,13 +622,13 @@ function App() {
 
   function selectMailbox(mailbox: Mailbox) {
     setSelectedAccount(null);
-    setSelectedJob(null);
+    setSelectedJobSnapshot(null);
     setSelectedMailbox(mailbox);
   }
 
   function closeDetails() {
     setSelectedAccount(null);
-    setSelectedJob(null);
+    setSelectedJobSnapshot(null);
     setSelectedMailbox(null);
   }
 
@@ -2210,8 +2208,9 @@ function formatUnix(value: number) {
   return value ? new Date(value * 1000).toLocaleString() : '-';
 }
 
-function formatJobTime(value: string) {
+function formatJobTime(value: string | number) {
   if (!value) return '-';
+  if (typeof value === 'number') return formatUnix(value);
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
