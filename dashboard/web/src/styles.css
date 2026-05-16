@@ -1437,24 +1437,45 @@ tbody tr:hover, tr.selected { background: #f4f8ff; }
   border-left: 3px solid var(--app-accent);
   padding: 0 0 2px 12px;
 }
-.step > div {
+
+.step.currentStep {
+  border-left-color: var(--teal);
+}
+
+.stepHeader {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
 }
-.step > div > span {
+
+.stepState {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
 }
+
+.stepMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 5px;
+  color: var(--faint);
+}
+
+.stepLive {
+  color: var(--teal);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .step p {
   margin-top: 6px;
   color: var(--danger);
 }
 .step .stepProgress {
-  color: var(--muted);
+  color: var(--muted-foreground);
 }
 .rawHint,
 .stepTime {

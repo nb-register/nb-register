@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -97,6 +97,26 @@ type JobSnapshot = {
   progress?: WorkflowProgress;
   event_id: number;
 };
+
+function snapshotEventID(snapshot: JobSnapshot) {
+  return snapshot.event_id || snapshot.job?.updated_at || snapshot.progress?.updated_at_unix || 0;
+}
+
+function isRunningSnapshot(snapshot: JobSnapshot) {
+  return snapshot.job?.status === 'RUNNING';
+}
+
+function jobSnapshotMatchesStatus(snapshot: JobSnapshot, status: string) {
+  return !status || snapshot.job?.status === status;
+}
+
+function mergeJobSnapshots(prev: JobSnapshot[], snapshot: JobSnapshot, include: boolean) {
+  const jobID = snapshot.job?.job_id;
+  if (!jobID) return prev;
+  const next = prev.filter((item) => item.job?.job_id !== jobID);
+  if (!include) return next;
+  return [snapshot, ...next].sort((a, b) => snapshotEventID(b) - snapshotEventID(a));
+}
 
 type Mailbox = {
   email_address: string;
@@ -278,6 +298,7 @@ const stepLabels: DisplayLabelMap = {
 function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [jobSnapshots, setJobSnapshots] = useState<JobSnapshot[]>([]);
+  const [runningJobSnapshots, setRunningJobSnapshots] = useState<JobSnapshot[]>([]);
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [activeView, setActiveView] = useState<ViewKey>('accounts');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
@@ -293,13 +314,22 @@ function App() {
   const [mailboxOAuthing, setMailboxOAuthing] = useState('');
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxResponse, setInboxResponse] = useState<InboxResponse | null>(null);
-  const [runningAccountIds, setRunningAccountIds] = useState<Set<string>>(new Set());
   const [refreshingAccessTokenIds, setRefreshingAccessTokenIds] = useState<Set<string>>(new Set());
-  const [runningJobCount, setRunningJobCount] = useState(0);
   const [loadError, setLoadError] = useState('');
   const jobs = jobSnapshots.map((snapshot) => snapshot.job).filter((job): job is Job => !!job);
+  const runningJobs = runningJobSnapshots.map((snapshot) => snapshot.job).filter((job): job is Job => !!job);
+  const runningJobCount = runningJobs.length;
+  const runningAccountIds = new Set(runningJobs.filter((job) => job.account_id).map((job) => job.account_id));
   const selectedJob = selectedJobSnapshot?.job || null;
   const selectedJobProgress = selectedJobSnapshot?.progress || null;
+  const runningJobIDsKey = runningJobs.map((job) => job.job_id).sort().join('|');
+
+  const applyJobSnapshot = useCallback((snapshot: JobSnapshot) => {
+    if (!snapshot?.job?.job_id) return;
+    setJobSnapshots((prev) => mergeJobSnapshots(prev, snapshot, jobSnapshotMatchesStatus(snapshot, jobStatus)));
+    setRunningJobSnapshots((prev) => mergeJobSnapshots(prev, snapshot, isRunningSnapshot(snapshot)));
+    setSelectedJobSnapshot((prev) => prev?.job?.job_id === snapshot.job?.job_id ? snapshot : prev);
+  }, [jobStatus]);
 
   async function refresh() {
     setBusy(true);
@@ -312,11 +342,9 @@ function App() {
       ]);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setJobSnapshots(Array.isArray(jobsData) ? jobsData : []);
+      setRunningJobSnapshots(Array.isArray(runningJobsData) ? runningJobsData : []);
       const nextMailboxes = Array.isArray(mailboxesData) ? mailboxesData : [];
       setMailboxes(nextMailboxes);
-      const runningJobs = Array.isArray(runningJobsData) ? runningJobsData : [];
-      setRunningJobCount(runningJobs.length);
-      setRunningAccountIds(new Set(runningJobs.map((snapshot) => snapshot.job).filter((job): job is Job => !!job?.account_id).map((job) => job.account_id)));
       if (selectedJob) {
         await refreshSelectedJob(selectedJob.job_id);
       }
@@ -336,6 +364,7 @@ function App() {
 
   async function refreshSelectedJob(jobID: string) {
     const snapshot = await api<JobSnapshot>(`/api/jobs/${jobID}`);
+    applyJobSnapshot(snapshot);
     setSelectedJobSnapshot(snapshot && snapshot.job ? snapshot : null);
   }
 
@@ -439,7 +468,7 @@ function App() {
     try {
       const resp = await api<{ started: boolean }>('/api/mailboxes/register', { method: 'POST', body: '{}' });
       setToast({ kind: resp.started ? 'ok' : 'error', text: resp.started ? '手动注册邮箱已启动' : '手动注册邮箱未启动' });
-      window.setTimeout(refresh, 3000);
+      if (resp.started) await refresh();
     } catch (err) {
       setToast({ kind: 'error', text: errorText(err) });
     } finally {
@@ -563,27 +592,24 @@ function App() {
 
   useEffect(() => {
     refresh();
-    const id = window.setInterval(refresh, 15000);
-    return () => window.clearInterval(id);
   }, [accountStatus, jobStatus, mailboxStatus]);
 
   useEffect(() => {
-    if (!selectedJob?.job_id) {
-      setSelectedJobSnapshot(null);
+    if (!runningJobIDsKey) {
       return;
     }
-    const jobID = selectedJob.job_id;
-    const source = new EventSource(`/api/jobs/${jobID}/events`);
-    source.addEventListener('job', (event) => {
-      const snapshot = JSON.parse((event as MessageEvent).data) as JobSnapshot;
-      if (snapshot.job) setSelectedJobSnapshot(snapshot);
-      if (snapshot.job && snapshot.job.status !== 'RUNNING') {
-        source.close();
-      }
-    });
-    source.addEventListener('error', (event) => {
-      const data = (event as MessageEvent).data;
-      if (data) {
+    const sources = runningJobIDsKey.split('|').map((jobID) => {
+      const source = new EventSource(`/api/jobs/${jobID}/events`);
+      source.addEventListener('job', (event) => {
+        const snapshot = JSON.parse((event as MessageEvent).data) as JobSnapshot;
+        applyJobSnapshot(snapshot);
+        if (snapshot.job && snapshot.job.status !== 'RUNNING') {
+          source.close();
+        }
+      });
+      source.addEventListener('error', (event) => {
+        const data = (event as MessageEvent).data;
+        if (!data) return;
         try {
           const payload = JSON.parse(data) as { error?: string };
           if (payload.error) setToast({ kind: 'error', text: payload.error });
@@ -591,12 +617,13 @@ function App() {
           setToast({ kind: 'error', text: '工作流事件流解析失败' });
         }
         source.close();
-      }
+      });
+      return source;
     });
     return () => {
-      source.close();
+      sources.forEach((source) => source.close());
     };
-  }, [selectedJob?.job_id]);
+  }, [runningJobIDsKey, applyJobSnapshot]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1090,17 +1117,25 @@ function JobDetails({ job, progress, onCopy, onOtpSubmit }: {
         {canSubmitOtp(job) && <OtpSubmitter job={job} onSubmit={onOtpSubmit} />}
         <div className="timeline">
           {(job.steps || []).map((step) => {
-            const progress = stepProgressText(step);
+            const progressText = stepProgressText(step, progress);
+            const isCurrentStep = progress?.step_name === step.step_name && job.status === 'RUNNING';
             return (
-              <div className="step" key={step.step_name}>
-                <div>
+              <div className={`step${isCurrentStep ? ' currentStep' : ''}`} key={step.step_name}>
+                <div className="stepHeader">
                   <strong>{stepText(step.step_name)} <small className="rawHint">{step.step_name}</small></strong>
-                  <span>
+                  <span className="stepState">
+                    {isCurrentStep && <small className="stepLive">当前</small>}
                     {stepDuration(step)}
                     <StatusBadge status={step.status} />
                   </span>
                 </div>
-                {progress && <p className="stepProgress">{progress}</p>}
+                <div className="stepMeta">
+                  {step.started_at ? <small>开始 {formatUnix(step.started_at)}</small> : null}
+                  {step.completed_at ? <small>完成 {formatUnix(step.completed_at)}</small> : null}
+                  {step.recoverable ? <small>可恢复</small> : null}
+                  {step.retryable ? <small>可重试</small> : null}
+                </div>
+                {progressText && <p className="stepProgress">{progressText}</p>}
                 {step.error_message && <p>{step.error_message}</p>}
                 {step.result_json && (
                   <details className="jsonDetails">
@@ -2224,15 +2259,21 @@ function stepDuration(step: Step) {
 	return <small className="stepTime">{Math.floor(seconds / 60)}m {seconds % 60}s</small>;
 }
 
-function stepProgressText(step: Step) {
+function stepProgressText(step: Step, workflowProgress?: WorkflowProgress | null) {
   const data = parseJSON(step.result_json);
-  if (!data || typeof data !== 'object') return '';
-  const record = data as Record<string, any>;
-  const progress = record.progress && typeof record.progress === 'object' ? record.progress as Record<string, any> : {};
-  const message = stringValue(record.progress_message) || stringValue(progress.message);
+  if (data && typeof data === 'object') {
+    const record = data as Record<string, any>;
+    const progress = record.progress && typeof record.progress === 'object' ? record.progress as Record<string, any> : {};
+    const message = stringValue(record.progress_message) || stringValue(progress.message);
+    if (message) {
+      const atUnix = numberValue(record.progress_at_unix) || numberValue(progress.at_unix);
+      return atUnix ? `${message} · ${formatUnix(atUnix)}` : message;
+    }
+  }
+  if (!workflowProgress || workflowProgress.step_name !== step.step_name) return '';
+  const message = workflowProgress.error_message || statusText(workflowProgress.status.toUpperCase());
   if (!message) return '';
-  const atUnix = numberValue(record.progress_at_unix) || numberValue(progress.at_unix);
-  return atUnix ? `${message} · ${formatUnix(atUnix)}` : message;
+  return workflowProgress.updated_at_unix ? `${message} · ${formatUnix(workflowProgress.updated_at_unix)}` : message;
 }
 
 function trialText(value?: boolean) {
