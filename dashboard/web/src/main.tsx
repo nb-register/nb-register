@@ -977,15 +977,15 @@ function App() {
                   </TabsList>
 
                   <TabsContent value="all" className="workflowTabContent">
-                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无工作流任务" onSelect={selectJob} />
+                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无工作流任务" onSelect={selectJob} onGoPayRebindRetry={retryGoPayPaymentRebind} />
                   </TabsContent>
 
                   <TabsContent value="gpt" className="workflowTabContent">
-                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无 GPT 账号工作流" onSelect={selectJob} />
+                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无 GPT 账号工作流" onSelect={selectJob} onGoPayRebindRetry={retryGoPayPaymentRebind} />
                   </TabsContent>
 
                   <TabsContent value="gopay" className="workflowTabContent">
-                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无 GoPay 工作流" onSelect={selectJob} />
+                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无 GoPay 工作流" onSelect={selectJob} onGoPayRebindRetry={retryGoPayPaymentRebind} />
                   </TabsContent>
 
                   <TabsContent value="mailbox" className="workflowTabContent mailboxWorkflowTab">
@@ -1003,7 +1003,7 @@ function App() {
                       </Button>
                     </div>
                     <MailboxStatusStrip mailboxes={primaryMailboxes} allocations={gptEmailAllocations} />
-                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无邮箱工作流" onSelect={selectJob} />
+                    <JobTable jobs={jobsForWorkflowTab} selected={selectedJob?.job_id} emptyText="暂无邮箱工作流" onSelect={selectJob} onGoPayRebindRetry={retryGoPayPaymentRebind} />
                   </TabsContent>
                 </Tabs>
               </div>
@@ -1762,11 +1762,12 @@ function LinkedWorkflowButton({ job, onOpen }: { job: Job; onOpen: (job: Job) =>
   );
 }
 
-function JobTable({ jobs, selected, emptyText = '暂无工作流任务', onSelect }: {
+function JobTable({ jobs, selected, emptyText = '暂无工作流任务', onSelect, onGoPayRebindRetry }: {
   jobs: Job[];
   selected?: string;
   emptyText?: string;
   onSelect: (j: Job) => void;
+  onGoPayRebindRetry?: (job: Job) => Promise<void>;
 }) {
   return (
     <div className="tableWrap">
@@ -1790,12 +1791,34 @@ function JobTable({ jobs, selected, emptyText = '暂无工作流任务', onSelec
               <TableCell data-label="步骤" title={job.last_step}>{stepText(job.last_step)}</TableCell>
               <TableCell data-label="更新">{formatJobTime(job.updated_at)}</TableCell>
               <TableCell data-label="错误" className="errorCell" title={job.error_message}>{compactCellError(job.error_message || '-')}</TableCell>
-              <TableCell data-label="操作"><span className="muted">-</span></TableCell>
+              <TableCell data-label="操作">
+                {onGoPayRebindRetry && canRetryGoPayPaymentRebind(job)
+                  ? <GoPayRebindRowButton job={job} onRetry={onGoPayRebindRetry} />
+                  : <span className="muted">-</span>}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+function GoPayRebindRowButton({ job, onRetry }: { job: Job; onRetry: (job: Job) => Promise<void> }) {
+  const [submitting, setSubmitting] = useState(false);
+  async function retry(event: React.MouseEvent) {
+    event.stopPropagation();
+    setSubmitting(true);
+    try {
+      await onRetry(job);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  return (
+    <Button className="rowButtonText linkedWorkflowButton" disabled={submitting} {...buttonHint(job.action === 'GOPAY_PAYMENT_REBIND' ? '重试换绑' : '执行换绑')} onClick={(event) => void retry(event)}>
+      <RefreshCcw size={14} /> <span>{job.action === 'GOPAY_PAYMENT_REBIND' ? '重试换绑' : '换绑'}</span>
+    </Button>
   );
 }
 
@@ -2628,8 +2651,6 @@ function canRetryGoPayPaymentRebind(job: Job) {
     return job.status === 'FAILED_RETRYABLE' || job.status === 'FAILED_RECOVERABLE';
   }
   if (job.action !== 'GOPAY_PAYMENT') return false;
-  const rebindStarted = result.rebind_started === true || String(result.rebind_started || '').toLowerCase() === 'true';
-  if (rebindStarted) return false;
   const paymentCompleted = result.payment_completed === true || String(result.payment_completed || '').toLowerCase() === 'true';
   const hasPayment = !!(stringValue(result.charge_ref) || stringValue(result.snap_token));
   const changePhone = objectValue(result.change_phone);
