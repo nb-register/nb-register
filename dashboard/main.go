@@ -1170,7 +1170,19 @@ func (s *server) handleGoPayState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, resp)
+	waPhone, err := s.gopayAppClient.GoPayUserGetWAPhone(r.Context(), &pb.GoPayUserGetWAPhoneRequest{UserId: userID})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":                resp.GetSuccess(),
+		"error_message":          resp.GetErrorMessage(),
+		"user_id":                userID,
+		"wa_phone":               waPhone.GetWaPhone(),
+		"wa_phone_error_message": waPhone.GetErrorMessage(),
+		"status":                 resp.GetStatus(),
+	})
 }
 
 func (s *server) handleGoPayPayment(w http.ResponseWriter, r *http.Request) {

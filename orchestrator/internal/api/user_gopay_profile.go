@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"gorm.io/gorm/clause"
@@ -47,9 +48,16 @@ func (s *Server) GoPayUserGetWAPhone(ctx context.Context, req *pb.GoPayUserGetWA
 		return &pb.GoPayUserWAPhoneResponse{UserId: stateKey, ErrorMessage: fmt.Sprintf("load wa_phone: %v", result.Error)}, nil
 	}
 	if result.RowsAffected == 0 {
+		if stateKey == "local" {
+			return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey, WaPhone: configuredGoPayWAPhoneForAPI()}, nil
+		}
 		return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey}, nil
 	}
 	return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey, WaPhone: normalizeIndonesiaPhoneForAPI(profile.WAPhone)}, nil
+}
+
+func configuredGoPayWAPhoneForAPI() string {
+	return normalizeIndonesiaPhoneForAPI(os.Getenv("GOPAY_WA_PHONE_NUMBER"))
 }
 
 func normalizeIndonesiaPhoneForAPI(phone string) string {

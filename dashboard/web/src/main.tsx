@@ -174,6 +174,12 @@ type InboxResponse = {
   ban_count: number;
 };
 
+type GoPayDashboardStateResponse = GoPayUserStatusResponse & {
+  user_id: string;
+  wa_phone: string;
+  wa_phone_error_message?: string;
+};
+
 type LatestOtp = {
   otp: string;
   subject: string;
@@ -323,7 +329,7 @@ function App() {
   const [mailboxOAuthing, setMailboxOAuthing] = useState('');
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxResponse, setInboxResponse] = useState<InboxResponse | null>(null);
-  const [goPayStateStatus, setGoPayStateStatus] = useState<GoPayUserStatusResponse | null>(null);
+  const [goPayStateStatus, setGoPayStateStatus] = useState<GoPayDashboardStateResponse | null>(null);
   const [goPayStateLoading, setGoPayStateLoading] = useState(false);
   const [refreshingAccessTokenIds, setRefreshingAccessTokenIds] = useState<Set<string>>(new Set());
   const [loadError, setLoadError] = useState('');
@@ -429,7 +435,7 @@ function App() {
   async function loadGoPayStateStatus(showToast = false) {
     setGoPayStateLoading(true);
     try {
-      const resp = await api<GoPayUserStatusResponse>('/api/gopay/state?user_id=local');
+      const resp = await api<GoPayDashboardStateResponse>('/api/gopay/state?user_id=local');
       setGoPayStateStatus(resp);
       if (showToast) {
         setToast(resp.error_message
@@ -2081,10 +2087,11 @@ function WorkflowSummary({ job, runningCount, runningTitle, runningText, idleTit
   );
 }
 
-function GoPayStateStatusPanel({ state, loading }: { state: GoPayUserStatusResponse | null; loading: boolean }) {
+function GoPayStateStatusPanel({ state, loading }: { state: GoPayDashboardStateResponse | null; loading: boolean }) {
   const status = state?.status;
-  const error = state?.error_message || status?.error_message || '';
+  const error = state?.error_message || state?.wa_phone_error_message || status?.error_message || '';
   const stage = String(status?.stage || '').trim();
+  const waPhone = state?.wa_phone || '';
   const cls = error ? 'bad' : status?.token_present && stage === 'ready' ? 'good' : 'mid';
   const title = loading
     ? 'State 刷新中'
@@ -2096,7 +2103,7 @@ function GoPayStateStatusPanel({ state, loading }: { state: GoPayUserStatusRespo
   const text = error
     ? compactCellError(error)
     : status
-      ? `${status.token_present ? 'Token 已保存' : '无 Token'} · ${status.phone || '无手机号'} · ${goPayBalanceText(status)}`
+      ? `WA ${waPhone || '-'} · ${status.token_present ? 'Token 已保存' : '无 Token'} · ${goPayBalanceText(status)}`
       : '打开 GoPay 页后会读取 local state。';
   const icon = loading ? <Clock size={16} /> : error ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />;
   const latestOtp = latestGoPayOtpWindow(status);
@@ -2111,9 +2118,10 @@ function GoPayStateStatusPanel({ state, loading }: { state: GoPayUserStatusRespo
         </div>
       </div>
       <div className="goPayStateGrid">
-        <GoPayStateField label="User" value="local" />
+        <GoPayStateField label="User" value={state?.user_id || 'local'} />
+        <GoPayStateField label="WA手机号" value={waPhone || '-'} />
         <GoPayStateField label="阶段" value={goPayStateStageText(stage)} raw={stage || '-'} />
-        <GoPayStateField label="手机号" value={status?.phone || '-'} />
+        <GoPayStateField label="GoPay手机号" value={status?.phone || '-'} />
         <GoPayStateField label="Token" value={status?.token_present ? '已保存' : '-'} />
         <GoPayStateField label="余额" value={status ? goPayBalanceText(status) : '-'} />
         <GoPayStateField label="设备" value={status?.device_fingerprint || '-'} />
