@@ -35,6 +35,8 @@ message StartRegisterResponse {
   int64 otp_issued_after_unix = 6;
   string stage = 7;
   string status_message = 8;
+  int64 otp_wait_started_at_unix = 9;
+  int64 otp_request_action_started_at_unix = 10;
 }
 
 message CompleteRegisterRequest {
@@ -69,6 +71,8 @@ message BrowserFlowStatusResponse {
   int64 updated_at_unix = 11;
   int64 otp_issued_after_unix = 12;
   RegisterResponse result = 13;
+  int64 otp_wait_started_at_unix = 14;
+  int64 otp_request_action_started_at_unix = 15;
 }
 
 service BrowserRegistration {

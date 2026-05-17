@@ -50,6 +50,8 @@ class BrowserFlow:
         self.started_at_unix = 0
         self.updated_at_unix = int(time.time())
         self.otp_issued_after_unix = 0
+        self.otp_wait_started_at_unix = 0
+        self.otp_request_action_started_at_unix = 0
         self.stage = "queued"
         self.status_message = "browser flow queued"
         self.result: dict | None = None
@@ -104,22 +106,35 @@ class BrowserFlow:
             self.status_message = str(message or stage).strip()
             self.updated_at_unix = int(time.time())
 
-    def _mark_otp_request_click(self) -> int:
+    def _mark_otp_request_action_started(self) -> int:
         now = int(time.time())
         with self._lock:
+            if self.otp_request_action_started_at_unix <= 0:
+                self.otp_request_action_started_at_unix = now
             if self.otp_issued_after_unix <= 0:
-                self.otp_issued_after_unix = now
+                self.otp_issued_after_unix = self.otp_request_action_started_at_unix
             return self.otp_issued_after_unix
+
+    def _mark_otp_wait_started(self) -> tuple[int, int]:
+        now = int(time.time())
+        with self._lock:
+            self.otp_wait_started_at_unix = now
+            if self.otp_issued_after_unix <= 0 and self.otp_request_action_started_at_unix > 0:
+                self.otp_issued_after_unix = self.otp_request_action_started_at_unix
+            return self.otp_issued_after_unix, self.otp_wait_started_at_unix
 
     def _wait_for_otp(self, timeout: int | None = None) -> str:
         del timeout
-        # Prefer the timestamp captured immediately before clicking the action
-        # that triggers the email. Fall back here for older flows.
-        if self.otp_issued_after_unix <= 0:
-            self._mark_otp_request_click()
+        issued_after, wait_started = self._mark_otp_wait_started()
         self._otp_required_event.set()
         self._set_status("waiting_for_otp", "waiting for orchestrator-supplied OTP")
-        logger.info("[browser-reg] waiting orchestrator-supplied OTP flow=%s email=%s", self.flow_id, self.safe_email)
+        logger.info(
+            "[browser-reg] waiting orchestrator-supplied OTP flow=%s email=%s issued_after_unix=%s wait_started_at_unix=%s",
+            self.flow_id,
+            self.safe_email,
+            issued_after,
+            wait_started,
+        )
         while not self._otp_event.wait(0.25):
             if self._should_cancel():
                 raise RuntimeError(f"browser {self.mode} cancelled")
@@ -139,10 +154,10 @@ class BrowserFlow:
     def _on_status_change(self, status_str: str) -> None:
         status = str(status_str or "").strip()
         if status == "OTP_REQUEST_CLICK":
-            issued_after = self._mark_otp_request_click()
+            issued_after = self._mark_otp_request_action_started()
             self._set_status("otp_request_click", "clicking OTP request action")
             logger.info(
-                "[browser-reg] OTP request click flow=%s email=%s issued_after_unix=%s",
+                "[browser-reg] OTP request action flow=%s email=%s issued_after_unix=%s",
                 self.flow_id,
                 self.safe_email,
                 issued_after,
@@ -151,10 +166,19 @@ class BrowserFlow:
         if status == "OTP_REQUEST_CLICKED":
             self._set_status("otp_request_clicked", "OTP request action clicked")
             return
+        if status == "WAITING_FOR_OTP":
+            issued_after, wait_started = self._mark_otp_wait_started()
+            self._set_status("waiting_for_otp", "waiting for orchestrator-supplied OTP")
+            logger.info(
+                "[browser-reg] browser reached OTP page flow=%s email=%s issued_after_unix=%s wait_started_at_unix=%s",
+                self.flow_id,
+                self.safe_email,
+                issued_after,
+                wait_started,
+            )
+            return
         if status:
             self._set_status(status, status.lower().replace("_", " "))
-        if status_str == "WAITING_FOR_OTP":
-            logger.info("[browser-reg] browser reached OTP page flow=%s email=%s", self.flow_id, self.safe_email)
 
     def _run(self) -> None:
         try:
@@ -232,6 +256,8 @@ class BrowserRegistrationServicer(browser_pb2_grpc.BrowserRegistrationServicer):
             otp_issued_after_unix=flow.otp_issued_after_unix,
             stage=stage,
             status_message=status_message,
+            otp_wait_started_at_unix=flow.otp_wait_started_at_unix,
+            otp_request_action_started_at_unix=flow.otp_request_action_started_at_unix,
         )
 
     @staticmethod
@@ -268,6 +294,9 @@ class BrowserRegistrationServicer(browser_pb2_grpc.BrowserRegistrationServicer):
             stage = flow.stage
             status_message = flow.status_message
             updated_at_unix = flow.updated_at_unix
+            otp_issued_after_unix = flow.otp_issued_after_unix
+            otp_wait_started_at_unix = flow.otp_wait_started_at_unix
+            otp_request_action_started_at_unix = flow.otp_request_action_started_at_unix
         result = self._register_response_from_flow(flow) if flow.done else None
         success = bool(result and result.success)
         error_message = ""
@@ -285,7 +314,9 @@ class BrowserRegistrationServicer(browser_pb2_grpc.BrowserRegistrationServicer):
             error_message=error_message,
             started_at_unix=flow.started_at_unix,
             updated_at_unix=updated_at_unix,
-            otp_issued_after_unix=flow.otp_issued_after_unix,
+            otp_issued_after_unix=otp_issued_after_unix,
+            otp_wait_started_at_unix=otp_wait_started_at_unix,
+            otp_request_action_started_at_unix=otp_request_action_started_at_unix,
         )
         if result is not None:
             response.result.CopyFrom(result)

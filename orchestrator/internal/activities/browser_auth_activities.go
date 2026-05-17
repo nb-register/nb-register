@@ -75,6 +75,8 @@ func (s *Server) BrowserAuthStartActivity(ctx context.Context, input BrowserAuth
 	output.Email = account.GetEmail()
 	output.OtpRequired = startResp.GetOtpRequired()
 	output.OtpIssuedAfterUnix = startResp.GetOtpIssuedAfterUnix()
+	output.OtpWaitStartedAtUnix = startResp.GetOtpWaitStartedAtUnix()
+	output.OtpRequestActionStartedAtUnix = startResp.GetOtpRequestActionStartedAtUnix()
 	output.OtpTimeoutSeconds = s.registrationOtpTimeout()
 	step.progress("browser auth flow created", map[string]any{
 		"mode":         input.GetMode(),
@@ -132,7 +134,7 @@ func (s *Server) BrowserAuthWaitActivity(ctx context.Context, input BrowserAuthW
 	}
 	var heartbeatAt time.Time
 	lastStage := ""
-	otpRequestRecorded := false
+	var recordedOTPRequestAt int64
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -158,14 +160,16 @@ func (s *Server) BrowserAuthWaitActivity(ctx context.Context, input BrowserAuthW
 			message = "browser auth running"
 		}
 		progressFields := map[string]any{
-			"mode":                  input.GetMode(),
-			"flow_id":               input.GetFlowId(),
-			"browser_stage":         stage,
-			"browser_message":       message,
-			"otp_required":          status.GetOtpRequired(),
-			"done":                  status.GetDone(),
-			"updated_at_unix":       status.GetUpdatedAtUnix(),
-			"otp_issued_after_unix": status.GetOtpIssuedAfterUnix(),
+			"mode":                               input.GetMode(),
+			"flow_id":                            input.GetFlowId(),
+			"browser_stage":                      stage,
+			"browser_message":                    message,
+			"otp_required":                       status.GetOtpRequired(),
+			"done":                               status.GetDone(),
+			"updated_at_unix":                    status.GetUpdatedAtUnix(),
+			"otp_issued_after_unix":              status.GetOtpIssuedAfterUnix(),
+			"otp_wait_started_at_unix":           status.GetOtpWaitStartedAtUnix(),
+			"otp_request_action_started_at_unix": status.GetOtpRequestActionStartedAtUnix(),
 		}
 		if stage != lastStage {
 			step.progress(message, progressFields)
@@ -173,12 +177,12 @@ func (s *Server) BrowserAuthWaitActivity(ctx context.Context, input BrowserAuthW
 		} else {
 			step.progressEvery(&heartbeatAt, message, progressFields)
 		}
-		if !otpRequestRecorded && status.GetOtpIssuedAfterUnix() > 0 {
+		if requestActionStartedAt := status.GetOtpRequestActionStartedAtUnix(); requestActionStartedAt > 0 && requestActionStartedAt != recordedOTPRequestAt {
 			if err := s.recordBrowserAuthOTPRequestStep(ctx, input, status, stage, message); err != nil {
 				output.Data = protoData(data)
 				return output, step.complete(data, err)
 			}
-			otpRequestRecorded = true
+			recordedOTPRequestAt = requestActionStartedAt
 		}
 
 		if status.GetDone() {
@@ -200,8 +204,16 @@ func (s *Server) BrowserAuthWaitActivity(ctx context.Context, input BrowserAuthW
 		}
 
 		if status.GetOtpRequired() {
+			requestActionStartedAt := status.GetOtpRequestActionStartedAtUnix()
+			if requestActionStartedAt <= 0 {
+				err := fmt.Errorf("browser %s OTP request action start time missing", input.GetMode())
+				output.Data = protoData(data)
+				return output, step.complete(data, err)
+			}
 			output.OtpRequired = true
-			output.OtpIssuedAfterUnix = status.GetOtpIssuedAfterUnix()
+			output.OtpIssuedAfterUnix = requestActionStartedAt
+			output.OtpWaitStartedAtUnix = status.GetOtpWaitStartedAtUnix()
+			output.OtpRequestActionStartedAtUnix = requestActionStartedAt
 			output.Data = protoData(data)
 			return output, step.complete(data, nil)
 		}
@@ -221,14 +233,16 @@ func (s *Server) recordBrowserAuthOTPRequestStep(ctx context.Context, input Brow
 		return err
 	}
 	data := map[string]any{
-		"account_id":              input.GetAccountId(),
-		"flow_id":                 input.GetFlowId(),
-		"mode":                    input.GetMode(),
-		"email":                   input.GetEmail(),
-		"browser_stage":           stage,
-		"browser_message":         message,
-		"otp_issued_after_unix":   status.GetOtpIssuedAfterUnix(),
-		"browser_updated_at_unix": status.GetUpdatedAtUnix(),
+		"account_id":                         input.GetAccountId(),
+		"flow_id":                            input.GetFlowId(),
+		"mode":                               input.GetMode(),
+		"email":                              input.GetEmail(),
+		"browser_stage":                      stage,
+		"browser_message":                    message,
+		"otp_issued_after_unix":              status.GetOtpIssuedAfterUnix(),
+		"otp_wait_started_at_unix":           status.GetOtpWaitStartedAtUnix(),
+		"otp_request_action_started_at_unix": status.GetOtpRequestActionStartedAtUnix(),
+		"browser_updated_at_unix":            status.GetUpdatedAtUnix(),
 	}
 	step, err := s.startActivityStep(ctx, input.GetJobId(), stepName, false, true)
 	if err != nil {

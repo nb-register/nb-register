@@ -76,6 +76,8 @@ message BrowserAuthStartOutput {
   int32 otp_timeout_seconds = 6;
   RegisterActivityOutput result = 7;
   google.protobuf.Struct data = 8;
+  int64 otp_wait_started_at_unix = 9;
+  int64 otp_request_action_started_at_unix = 10;
 }
 
 message BrowserAuthCompleteInput {
@@ -106,6 +108,8 @@ message BrowserAuthWaitOutput {
   int32 otp_timeout_seconds = 6;
   RegisterActivityOutput result = 7;
   google.protobuf.Struct data = 8;
+  int64 otp_wait_started_at_unix = 9;
+  int64 otp_request_action_started_at_unix = 10;
 }
 
 message BrowserAuthCancelInput {

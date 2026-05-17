@@ -256,6 +256,10 @@ def browser_login(
 
     def click_email_continue(label: str) -> bool:
         try:
+            on_status_change_fn("OTP_REQUEST_CLICK")
+        except Exception as e:
+            logger.info("[browser-reg] Login OTP request callback failed: %s", sanitize_text(e))
+        try:
             clicked = page_evaluate('''() => {
                 const visible = (el) => {
                     const rect = el.getBoundingClientRect();
@@ -293,6 +297,7 @@ def browser_login(
                 return false;
             }''')
             if clicked:
+                on_status_change_fn("OTP_REQUEST_CLICKED")
                 logger.info("[browser-reg] %s: JS form submit", label)
                 return True
         except Exception as e:
@@ -300,6 +305,7 @@ def browser_login(
 
         try:
             with_active_page(lambda p: p.keyboard.press("Enter"))
+            on_status_change_fn("OTP_REQUEST_CLICKED")
             logger.info("[browser-reg] %s: keyboard Enter", label)
             return True
         except Exception as e:

@@ -71,6 +71,8 @@ export interface BrowserAuthStartOutput {
   otp_timeout_seconds: number;
   result: RegisterActivityOutput | undefined;
   data: { [key: string]: any } | undefined;
+  otp_wait_started_at_unix: number;
+  otp_request_action_started_at_unix: number;
 }
 
 export interface BrowserAuthCompleteInput {
@@ -101,6 +103,8 @@ export interface BrowserAuthWaitOutput {
   otp_timeout_seconds: number;
   result: RegisterActivityOutput | undefined;
   data: { [key: string]: any } | undefined;
+  otp_wait_started_at_unix: number;
+  otp_request_action_started_at_unix: number;
 }
 
 export interface BrowserAuthCancelInput {
