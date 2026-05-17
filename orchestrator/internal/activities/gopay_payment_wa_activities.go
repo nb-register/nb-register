@@ -34,6 +34,10 @@ func (s *Server) GoPayResolveWAPhoneActivity(ctx context.Context, input GoPayRes
 
 		phone := normalizeIndonesiaPhone(input.GetWaPhone())
 		data["request_phone_present"] = phone != ""
+		if phone == "" && userID == goPayLocalSource {
+			phone = configuredGoPayWAPhone()
+			data["env_phone_present"] = phone != ""
+		}
 		if phone == "" {
 			stored, err := s.loadGoPayWAPhoneProfile(ctx, userID)
 			if err != nil {
@@ -42,10 +46,6 @@ func (s *Server) GoPayResolveWAPhoneActivity(ctx context.Context, input GoPayRes
 			}
 			phone = stored
 			data["profile_phone_present"] = phone != ""
-		}
-		if phone == "" && userID == goPayLocalSource {
-			phone = configuredGoPayWAPhone()
-			data["env_phone_present"] = phone != ""
 		}
 		if phone == "" {
 			err := fmt.Errorf("wa_phone is required for WA GoPay payment")

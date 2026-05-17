@@ -47,10 +47,12 @@ func (s *Server) GoPayUserGetWAPhone(ctx context.Context, req *pb.GoPayUserGetWA
 	if result.Error != nil {
 		return &pb.GoPayUserWAPhoneResponse{UserId: stateKey, ErrorMessage: fmt.Sprintf("load wa_phone: %v", result.Error)}, nil
 	}
-	if result.RowsAffected == 0 {
-		if stateKey == "local" {
-			return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey, WaPhone: configuredGoPayWAPhoneForAPI()}, nil
+	if stateKey == "local" {
+		if phone := configuredGoPayWAPhoneForAPI(); phone != "" {
+			return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey, WaPhone: phone}, nil
 		}
+	}
+	if result.RowsAffected == 0 {
 		return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey}, nil
 	}
 	return &pb.GoPayUserWAPhoneResponse{Success: true, UserId: stateKey, WaPhone: normalizeIndonesiaPhoneForAPI(profile.WAPhone)}, nil
