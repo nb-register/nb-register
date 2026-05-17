@@ -114,7 +114,11 @@ func (s *Server) startGoPayAppAuth(ctx context.Context, input GoPayAppOTPStartIn
 		}
 		if strings.TrimSpace(statusAfter.GetStage()) == "signup_pin_required" {
 			output.PinSetupRequired = true
+			output.SignupComplete = true
+			output.AccountTokenReady = true
 			data["pin_setup_required"] = true
+			data["signup_complete"] = true
+			data["account_token_ready"] = true
 			step.update(data)
 			return output, nil
 		}
@@ -173,9 +177,13 @@ func (s *Server) completeGoPayAppAuth(ctx context.Context, input GoPayAppOTPComp
 	}
 	if completeResp.GetPinSetupRequired() || strings.TrimSpace(completeResp.GetStage()) == "signup_pin_required" {
 		output.PinSetupRequired = true
+		output.SignupComplete = true
+		output.AccountTokenReady = true
 		output.Stage = completeResp.GetStage()
 		output.Phone = completeResp.GetPhone()
 		data["pin_setup_required"] = true
+		data["signup_complete"] = true
+		data["account_token_ready"] = true
 		s.activityStep(ctx, input.GetJobId(), stepName, false, true).update(data)
 		return output, nil
 	}
@@ -193,7 +201,11 @@ func (s *Server) completeGoPayAppAuth(ctx context.Context, input GoPayAppOTPComp
 	}
 	if strings.TrimSpace(statusAfter.GetStage()) == "signup_pin_required" {
 		output.PinSetupRequired = true
+		output.SignupComplete = true
+		output.AccountTokenReady = true
 		data["pin_setup_required"] = true
+		data["signup_complete"] = true
+		data["account_token_ready"] = true
 		s.activityStep(ctx, input.GetJobId(), stepName, false, true).update(data)
 		return output, nil
 	}

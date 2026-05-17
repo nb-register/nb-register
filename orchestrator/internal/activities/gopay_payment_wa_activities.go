@@ -88,7 +88,7 @@ func (s *Server) GoPayResolveWAPhoneActivity(ctx context.Context, input GoPayRes
 func goPayWAPhoneCheckError(status, message string) error {
 	status = strings.ToLower(strings.TrimSpace(status))
 	message = strings.TrimSpace(message)
-	if status == "available" {
+	if status == "available" || status == "registered" {
 		return nil
 	}
 	if message == "" {

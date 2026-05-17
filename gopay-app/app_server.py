@@ -1112,6 +1112,30 @@ class GopayAppServicer(gopay_app_pb2_grpc.GopayAppServiceServicer):
                 save_state(state)
                 state = load_state()
 
+            stage = str(state.get("stage", "")).strip()
+            if stage in ("signup_pin_required", "signup_pin_otp_pending"):
+                token_check = check_token_valid(state)
+                state = load_state()
+                state["stage"] = stage
+                save_state(state)
+                if not _token_check_valid(token_check):
+                    return gopay_app_pb2.AuthStartResponse(
+                        success=False,
+                        error_message=_token_check_error(token_check),
+                        mode="signup",
+                        stage=stage,
+                        pin_setup_required=True,
+                    )
+                return gopay_app_pb2.AuthStartResponse(
+                    success=True,
+                    mode="signup",
+                    stage=stage,
+                    otp_sent=stage == "signup_pin_otp_pending",
+                    verification_id=state.get("_signup_pin_verification_id", ""),
+                    verification_method=state.get("_signup_pin_verification_method", ""),
+                    pin_setup_required=True,
+                )
+
             token_check = check_token_valid(state)
             state = load_state()
             if _token_check_valid(token_check):
@@ -1121,7 +1145,6 @@ class GopayAppServicer(gopay_app_pb2_grpc.GopayAppServiceServicer):
                     stage=state.get("stage", "ready"),
                     ready=True,
                 )
-            stage = str(state.get("stage", "")).strip()
             if stage == "login_otp_pending":
                 return gopay_app_pb2.AuthStartResponse(
                     success=True,
@@ -1142,19 +1165,10 @@ class GopayAppServicer(gopay_app_pb2_grpc.GopayAppServiceServicer):
                     pin_setup_required=True,
                 )
             if stage == "signup_pin_required":
-                resp = self.CreatePinStart(
-                    gopay_app_pb2.CreatePinStartRequest(pin=request.pin, otp_channel=request.otp_channel),
-                    context,
-                )
-                state = load_state()
                 return gopay_app_pb2.AuthStartResponse(
-                    success=resp.success,
-                    error_message=resp.error_message,
+                    success=True,
                     mode="signup",
-                    stage=state.get("stage", "idle"),
-                    otp_sent=resp.otp_sent,
-                    verification_id=resp.verification_id,
-                    verification_method=resp.verification_method,
+                    stage=stage,
                     pin_setup_required=True,
                 )
             if stage == "signup_otp_pending":

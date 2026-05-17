@@ -1294,6 +1294,21 @@ def start_signup_pin(state: dict, pin: str, otp_channel: str = "") -> dict:
         return {"success": False, "error": "signup phone missing"}
 
     c = GopayClient(state.get("token", ""), proxy=gopay_proxy_for_state(state), device=ensure_state_device(state))
+    profile = c.get(f"{GOPAY_CUSTOMER}/v1/users/profile")
+    if profile.get("status") == 200:
+        data = profile.get("data") if isinstance(profile.get("data"), dict) else {}
+        if data.get("is_pin_setup"):
+            phone = data.get("phone") or data.get("number") or phone
+            state["phone"] = _normalize_phone(phone)
+            state["stage"] = "ready"
+            state["pin_setup_at"] = int(time.time())
+            state["ready_at"] = int(time.time())
+            state.pop("last_error", None)
+            for key in SIGNUP_STATE_KEYS:
+                state.pop(key, None)
+            save_state(state)
+            return {"success": True, "phone": state.get("phone", ""), "pin_setup_complete": True}
+
     r = c.post(f"{GOPAY_CUSTOMER}/api/v1/users/pins/allowed", body={"pin": pin})
     log_api_response("pin allowed response", r)
     if r["status"] != 200:

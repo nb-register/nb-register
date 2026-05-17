@@ -70,7 +70,7 @@ func TestGoPayWAPhoneCheckErrorDistinguishesInconclusiveCheck(t *testing.T) {
 	if err := goPayWAPhoneCheckError("available", ""); err != nil {
 		t.Fatalf("available returned error: %v", err)
 	}
-	if err := goPayWAPhoneCheckError("registered", "PHONE_REGISTERED"); err == nil || err.Error() != "wa_phone unavailable: PHONE_REGISTERED" {
+	if err := goPayWAPhoneCheckError("registered", "PHONE_REGISTERED"); err != nil {
 		t.Fatalf("registered error = %v", err)
 	}
 	if err := goPayWAPhoneCheckError("rate_limited", "GOPAY_PROXY_POOL exhausted"); err == nil || err.Error() != "wa_phone check inconclusive: GOPAY_PROXY_POOL exhausted" {

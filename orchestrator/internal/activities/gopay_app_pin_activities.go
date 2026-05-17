@@ -57,15 +57,6 @@ func (s *Server) startGoPayAppCreatePin(ctx context.Context, input GoPayAppCreat
 	}
 	output.Stage = statusBefore.GetStage()
 	output.Phone = statusBefore.GetPhone()
-	if goPayStatusTokenReady(statusBefore) && strings.TrimSpace(statusBefore.GetStage()) != "signup_pin_required" {
-		output.Ready = true
-		output.AccountTokenReady = true
-		output.SignupPinComplete = true
-		data["ready"] = true
-		data["account_token_ready"] = true
-		data["signup_pin_complete"] = true
-		return output, s.completeGoPayAppOTPStep(ctx, input.GetJobId(), stepName, data, nil)
-	}
 	if strings.TrimSpace(statusBefore.GetStage()) == "signup_pin_otp_pending" {
 		output.OtpRequired = true
 		output.IssuedAfterUnix = statusBefore.GetSignupPinOtpSentAtUnix()

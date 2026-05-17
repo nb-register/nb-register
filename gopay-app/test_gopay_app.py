@@ -1442,6 +1442,11 @@ class SignupFlowTests(unittest.TestCase):
             def __init__(self, token, proxy=None, device=None):
                 self.token = token
 
+            def get(self, url, **kwargs):
+                if url.endswith("/v1/users/profile"):
+                    return {"status": 200, "data": {"is_pin_setup": False}}
+                raise AssertionError(f"unexpected get {url}")
+
             def post(self, url, body=None, **kwargs):
                 calls.append((url, body, kwargs))
                 if url.endswith("/api/v1/users/pins/allowed"):
@@ -1498,6 +1503,39 @@ class SignupFlowTests(unittest.TestCase):
                 "Is-Token-Required": "false",
             },
         )
+
+    def test_signup_pin_start_treats_existing_pin_as_settled(self):
+        state = {
+            "stage": "ready",
+            "token": jwt_with_exp(int(time.time()) + 3600),
+            "phone": TEST_LOCAL_PHONE,
+            "device": {},
+        }
+        calls = []
+
+        class FakeClient:
+            def __init__(self, token, proxy=None, device=None):
+                self.token = token
+
+            def get(self, url, **kwargs):
+                calls.append(("get", url))
+                if url.endswith("/v1/users/profile"):
+                    return {"status": 200, "data": {"is_pin_setup": True, "phone": TEST_E164_PHONE}}
+                raise AssertionError(f"unexpected get {url}")
+
+            def post(self, url, body=None, **kwargs):
+                raise AssertionError(f"pin setup endpoint should not be called: {url}")
+
+        with patch.object(gopay_app, "save_state", lambda target: None), \
+                patch.object(gopay_app, "GopayClient", FakeClient), \
+                patch.object(gopay_app, "ensure_access_token", lambda target, **kwargs: {"success": True}):
+            result = gopay_app.start_signup_pin(state, TEST_PIN)
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["pin_setup_complete"])
+        self.assertEqual(state["stage"], "ready")
+        self.assertEqual(state["phone"], TEST_LOCAL_PHONE)
+        self.assertEqual(calls, [("get", "https://customer.gopayapi.com/v1/users/profile")])
 
 
 class EnvelopeFlowTests(unittest.TestCase):

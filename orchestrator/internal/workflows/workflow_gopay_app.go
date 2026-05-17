@@ -380,7 +380,7 @@ func goPaySignupOTPNotReceivedError(wait OTPWaitOutput) error {
 	return fmt.Errorf("gopay signup otp not received: %s", reason)
 }
 
-func runGoPayAppAuth(ctx workflow.Context, activityCtx workflow.Context, cancelCtx workflow.Context, jobID string, opts goPayAppOTPOptions) (GoPayAppStepOutput, error) {
+func runGoPayAppEnsureTokenAvailable(ctx workflow.Context, activityCtx workflow.Context, cancelCtx workflow.Context, jobID string, opts goPayAppOTPOptions) (GoPayAppStepOutput, error) {
 	var last GoPayAppOTPOutput
 	stateJSON := opts.StateJSON
 	for attempt := 0; attempt < 4; attempt++ {
@@ -399,21 +399,12 @@ func runGoPayAppAuth(ctx workflow.Context, activityCtx workflow.Context, cancelC
 		if last.GetReady() || last.GetAccountTokenReady() {
 			return goPayAppStepFromOTP(last), nil
 		}
-		if last.GetPinSetupRequired() {
-			pinOpts := opts
-			pinOpts.StateJSON = stateJSON
-			pinResult, err := runGoPayAppCreatePin(ctx, activityCtx, cancelCtx, jobID, pinOpts)
-			stateJSON = pinResult.GetStateJson()
-			if err != nil {
-				return pinResult, err
-			}
-			continue
-		}
 		if !last.GetOtpRequired() {
 			continue
 		}
 
-		otp, err := waitForOTP(ctx, goPayOTPWaitInput(jobID, stepGoPayAppLogin, last, opts.OTPChannel, opts.SMSActivationID, opts.Source))
+		startChannel := effectiveGoPayOTPChannel(last, opts.OTPChannel)
+		otp, err := waitForOTP(ctx, goPayOTPWaitInput(jobID, stepGoPayAppLogin, last, startChannel, opts.SMSActivationID, opts.Source))
 		if err != nil {
 			return goPayAppStepFromOTP(last), err
 		}
@@ -426,7 +417,7 @@ func runGoPayAppAuth(ctx workflow.Context, activityCtx workflow.Context, cancelC
 			IssuedAfterUnix:  last.GetIssuedAfterUnix(),
 			OtpSource:        otp.GetSource(),
 			Data:             last.GetData(),
-			OtpChannel:       opts.OTPChannel,
+			OtpChannel:       startChannel,
 			SmsActivationId:  opts.SMSActivationID,
 			StateJson:        stateJSON,
 		}).Get(ctx, &last); err != nil {
@@ -436,17 +427,29 @@ func runGoPayAppAuth(ctx workflow.Context, activityCtx workflow.Context, cancelC
 		if last.GetReady() || last.GetAccountTokenReady() {
 			return goPayAppStepFromOTP(last), nil
 		}
-		if last.GetPinSetupRequired() {
-			pinOpts := opts
-			pinOpts.StateJSON = stateJSON
-			pinResult, err := runGoPayAppCreatePin(ctx, activityCtx, cancelCtx, jobID, pinOpts)
-			stateJSON = pinResult.GetStateJson()
-			if err != nil {
-				return pinResult, err
-			}
-		}
 	}
 	return goPayAppStepFromOTP(last), fmt.Errorf("gopay auth did not reach token-valid state")
+}
+
+func runGoPayAppEnsurePinSettled(ctx workflow.Context, activityCtx workflow.Context, cancelCtx workflow.Context, jobID string, opts goPayAppOTPOptions) (GoPayAppStepOutput, error) {
+	return runGoPayAppCreatePin(ctx, activityCtx, cancelCtx, jobID, opts)
+}
+
+func runGoPayAppAuth(ctx workflow.Context, activityCtx workflow.Context, cancelCtx workflow.Context, jobID string, opts goPayAppOTPOptions) (GoPayAppStepOutput, error) {
+	token, err := runGoPayAppEnsureTokenAvailable(ctx, activityCtx, cancelCtx, jobID, opts)
+	if err != nil {
+		return token, err
+	}
+	pinOpts := opts
+	pinOpts.StateJSON = token.GetStateJson()
+	pin, err := runGoPayAppEnsurePinSettled(ctx, activityCtx, cancelCtx, jobID, pinOpts)
+	if err != nil {
+		return pin, err
+	}
+	if pin.GetReady() || pin.GetAccountTokenReady() {
+		return pin, nil
+	}
+	return pin, fmt.Errorf("gopay auth did not reach token-valid state after pin settled")
 }
 func runGoPayAppCreatePin(ctx workflow.Context, activityCtx workflow.Context, cancelCtx workflow.Context, jobID string, opts goPayAppOTPOptions) (GoPayAppStepOutput, error) {
 	var start GoPayAppOTPOutput
